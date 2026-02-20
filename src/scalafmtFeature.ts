@@ -2,24 +2,23 @@ import { spawn } from 'node:child_process';
 import * as vscode from 'vscode';
 import {
   defaultScalafmtConfContent,
-  defaultScalafmtTimeoutMs,
   resolveScalafmtResolution,
   runScalafmtWithTimeout,
   ScalafmtConfig
 } from './scalafmtCore';
 import { StructuredLogger } from './structuredLogger';
+import {
+  readBudgetConfigFromWorkspaceConfig,
+  readFormatterConfigFromWorkspaceConfig
+} from './workspaceConfig';
 
 async function readWorkspaceScalafmtConfig(folder: vscode.WorkspaceFolder): Promise<ScalafmtConfig> {
-  const configUri = vscode.Uri.joinPath(folder.uri, '.vscode', 'scala-lite.json');
-  try {
-    const raw = await vscode.workspace.fs.readFile(configUri);
-    const parsed = JSON.parse(Buffer.from(raw).toString('utf8')) as {
-      formatter?: ScalafmtConfig;
-    };
-    return parsed.formatter ?? {};
-  } catch {
+  const owningFolder = vscode.workspace.workspaceFolders?.find((entry) => entry.uri.toString() === folder.uri.toString());
+  if (!owningFolder) {
     return {};
   }
+
+  return readFormatterConfigFromWorkspaceConfig();
 }
 
 async function fileExists(uri: vscode.Uri): Promise<boolean> {
@@ -31,8 +30,8 @@ async function fileExists(uri: vscode.Uri): Promise<boolean> {
   }
 }
 
-async function hasGlobalScalafmtBinary(): Promise<boolean> {
-  const probe = spawn('scalafmt', ['--version'], { shell: true });
+async function hasGlobalScalafmtBinary(cwd: string): Promise<boolean> {
+  const probe = spawn('scalafmt', ['--version'], { shell: true, cwd });
 
   return new Promise((resolve) => {
     const timeout = setTimeout(() => {
@@ -81,13 +80,14 @@ async function runResolvedScalafmt(
   command: string,
   args: string[],
   input: string,
+  cwd: string,
   timeoutMs: number
 ): Promise<{ status: 'ok' | 'timeout' | 'error'; stdout?: string; error?: string }> {
   let child: ReturnType<typeof spawn> | undefined;
 
   const result = await runScalafmtWithTimeout(async () => {
     return new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
-      child = spawn(command, args, { shell: true });
+      child = spawn(command, args, { shell: true, cwd });
 
       let stdout = '';
       let stderr = '';
@@ -136,7 +136,8 @@ export function registerScalafmtFeature(logger: StructuredLogger): vscode.Dispos
       }
 
       const config = await readWorkspaceScalafmtConfig(folder);
-      const timeoutMs = defaultScalafmtTimeoutMs(config);
+      const budgets = await readBudgetConfigFromWorkspaceConfig();
+      const timeoutMs = config.timeoutMs && config.timeoutMs > 0 ? config.timeoutMs : budgets.formatterTimeMs;
 
       const confReady = await ensureScalafmtConf(folder, logger);
       if (!confReady) {
@@ -148,7 +149,7 @@ export function registerScalafmtFeature(logger: StructuredLogger): vscode.Dispos
         workspaceRoot: folder.uri.fsPath,
         formatterPath: config.path,
         hasWorkspaceBinary: await fileExists(workspaceBinUri),
-        hasGlobalBinary: await hasGlobalScalafmtBinary(),
+        hasGlobalBinary: await hasGlobalScalafmtBinary(folder.uri.fsPath),
         useDocker: Boolean(config.useDocker),
         filePath: document.uri.fsPath,
         workspaceRelativeFilePath: vscode.workspace.asRelativePath(document.uri, false)
@@ -164,6 +165,7 @@ export function registerScalafmtFeature(logger: StructuredLogger): vscode.Dispos
         resolution.command,
         resolution.args,
         document.getText(),
+        folder.uri.fsPath,
         timeoutMs
       );
 

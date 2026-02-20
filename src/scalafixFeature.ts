@@ -2,7 +2,6 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import * as vscode from 'vscode';
 import {
-  defaultScalafixTimeoutMs,
   parseScalafixOutputLine,
   resolveScalafixResolution,
   runScalafixWithTimeout,
@@ -10,6 +9,10 @@ import {
   ScalafixIssue
 } from './scalafixCore';
 import { StructuredLogger } from './structuredLogger';
+import {
+  readBudgetConfigFromWorkspaceConfig,
+  readLinterConfigFromWorkspaceConfig
+} from './workspaceConfig';
 
 export const COMMAND_RUN_SCALAFIX = 'scalaLite.runScalafix';
 export const COMMAND_APPLY_SCALAFIX_FIX = 'scalaLite.applyScalafixFix';
@@ -50,16 +53,12 @@ class ScalafixCodeLensProvider implements vscode.CodeLensProvider {
 }
 
 async function readWorkspaceScalafixConfig(folder: vscode.WorkspaceFolder): Promise<ScalafixConfig> {
-  const configUri = vscode.Uri.joinPath(folder.uri, '.vscode', 'scala-lite.json');
-  try {
-    const raw = await vscode.workspace.fs.readFile(configUri);
-    const parsed = JSON.parse(Buffer.from(raw).toString('utf8')) as {
-      linter?: ScalafixConfig;
-    };
-    return parsed.linter ?? {};
-  } catch {
+  const owningFolder = vscode.workspace.workspaceFolders?.find((entry) => entry.uri.toString() === folder.uri.toString());
+  if (!owningFolder) {
     return {};
   }
+
+  return readLinterConfigFromWorkspaceConfig();
 }
 
 async function fileExists(uri: vscode.Uri): Promise<boolean> {
@@ -71,8 +70,8 @@ async function fileExists(uri: vscode.Uri): Promise<boolean> {
   }
 }
 
-async function hasGlobalScalafixBinary(): Promise<boolean> {
-  const probe = spawn('scalafix', ['--version'], { shell: true });
+async function hasGlobalScalafixBinary(cwd: string): Promise<boolean> {
+  const probe = spawn('scalafix', ['--version'], { shell: true, cwd });
 
   return new Promise((resolve) => {
     const timeout = setTimeout(() => {
@@ -107,13 +106,14 @@ async function runResolvedScalafix(
   command: string,
   args: string[],
   input: string,
+  cwd: string,
   timeoutMs: number
 ): Promise<{ status: 'ok' | 'timeout' | 'error'; stdout?: string; stderr?: string; error?: string }> {
   let child: ReturnType<typeof spawn> | undefined;
 
   const result = await runScalafixWithTimeout(async () => {
     return new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
-      child = spawn(command, args, { shell: true });
+      child = spawn(command, args, { shell: true, cwd });
 
       let stdout = '';
       let stderr = '';
@@ -195,7 +195,8 @@ export function registerScalafixFeature(logger: StructuredLogger): vscode.Dispos
     }
 
     const config = await readWorkspaceScalafixConfig(folder);
-    const timeoutMs = defaultScalafixTimeoutMs(config);
+    const budgets = await readBudgetConfigFromWorkspaceConfig();
+    const timeoutMs = config.timeoutMs && config.timeoutMs > 0 ? config.timeoutMs : budgets.formatterTimeMs;
     const configUri = vscode.Uri.joinPath(folder.uri, '.scalafix.conf');
     const hasConfig = await fileExists(configUri);
 
@@ -204,7 +205,7 @@ export function registerScalafixFeature(logger: StructuredLogger): vscode.Dispos
       workspaceRoot: folder.uri.fsPath,
       linterPath: config.path,
       hasWorkspaceBinary: await fileExists(workspaceBinUri),
-      hasGlobalBinary: await hasGlobalScalafixBinary(),
+      hasGlobalBinary: await hasGlobalScalafixBinary(folder.uri.fsPath),
       useDocker: Boolean(config.useDocker),
       filePath: document.uri.fsPath,
       workspaceRelativeFilePath: vscode.workspace.asRelativePath(document.uri, false),
@@ -219,7 +220,13 @@ export function registerScalafixFeature(logger: StructuredLogger): vscode.Dispos
 
     const startedAt = Date.now();
     const originalText = document.getText();
-    const execution = await runResolvedScalafix(resolution.command, resolution.args, originalText, timeoutMs);
+    const execution = await runResolvedScalafix(
+      resolution.command,
+      resolution.args,
+      originalText,
+      folder.uri.fsPath,
+      timeoutMs
+    );
 
     if (execution.status === 'timeout') {
       const seconds = Math.round(timeoutMs / 1000);

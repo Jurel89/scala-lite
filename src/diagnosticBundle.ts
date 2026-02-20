@@ -7,6 +7,19 @@ import {
 } from './diagnosticBundleCore';
 
 function sanitizeObject(value: unknown): unknown {
+  if (typeof value === 'string') {
+    const normalized = value.toLowerCase();
+    if (
+      normalized.includes('token=') ||
+      normalized.includes('password=') ||
+      normalized.includes('secret=') ||
+      normalized.includes('apikey=') ||
+      normalized.includes('api_key=')
+    ) {
+      return '<redacted>';
+    }
+  }
+
   if (Array.isArray(value)) {
     return value.map((item) => sanitizeObject(item));
   }

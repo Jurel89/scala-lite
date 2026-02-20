@@ -83,6 +83,16 @@
         "category": "%commandCategory.scalaLite%"
       },
       {
+        "command": "scalaLite.openConfiguration",
+        "title": "%command.scalaLite.openConfiguration.title%",
+        "category": "%commandCategory.scalaLite%"
+      },
+      {
+        "command": "scalaLite.rebuildIndex",
+        "title": "%command.scalaLite.rebuildIndex.title%",
+        "category": "%commandCategory.scalaLite%"
+      },
+      {
         "command": "scalaLite.runScalafix",
         "title": "%command.scalaLite.runScalafix.title%",
         "category": "%commandCategory.scalaLite%"
@@ -115,7 +125,8 @@
     "test": "node --test dist/test/**/*.test.js"
   },
   "dependencies": {
-    "jszip": "^3.10.1"
+    "jszip": "^3.10.1",
+    "minimatch": "^10.2.2"
   },
   "devDependencies": {
     "@types/node": "^22.12.0",

@@ -13,6 +13,8 @@
   "command.scalaLite.copyDiagnosticBundle.title": "Copy Diagnostic Bundle",
   "command.scalaLite.switchProfile.title": "Switch Profile",
   "command.scalaLite.editProfiles.title": "Edit Profiles",
+  "command.scalaLite.openConfiguration.title": "Open Configuration",
+  "command.scalaLite.rebuildIndex.title": "Rebuild Index",
   "command.scalaLite.runScalafix.title": "Run Scalafix",
   "configuration.scalaLite.activeProfile.description": "Active Scala Lite task profile name for this workspace."
 }

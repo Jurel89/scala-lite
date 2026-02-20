@@ -6,6 +6,8 @@ import {
 } from './buildOutputParser';
 import { StructuredLogger } from './structuredLogger';
 import { ScalaLiteLogCategory } from './structuredLogCore';
+import { BudgetRunner, runWithBudgetExtension } from './budgetCore';
+import { readBudgetConfigFromWorkspaceConfig } from './workspaceConfig';
 
 export interface ParsedBuildDiagnostic {
   readonly filePath: string;
@@ -92,9 +94,14 @@ export class BuildDiagnosticsRunner implements vscode.Disposable {
     this.diagnostics.clear();
 
     const workspaceFolder = vscode.workspace.getWorkspaceFolder(documentUri);
-    const cwd = workspaceFolder?.uri.fsPath;
+    if (!workspaceFolder) {
+      this.logger.warn('CONFIG', 'Command execution skipped: no workspace folder available for sandboxed cwd.');
+      return;
+    }
+
+    const cwd = workspaceFolder.uri.fsPath;
     const category: ScalaLiteLogCategory = terminalName.includes('Test') ? 'TEST' : 'RUN';
-    this.logger.info(category, `Executing command: ${command}`);
+    this.logger.info(category, `Executing command: ${this.sanitizeCommandForLog(command)}`);
 
     const terminal = vscode.window.terminals.find((item) => item.name === terminalName) ?? vscode.window.createTerminal({ name: terminalName });
     terminal.show(true);
@@ -102,7 +109,88 @@ export class BuildDiagnosticsRunner implements vscode.Disposable {
 
     this.outputChannel.appendLine(`$ ${command}`);
 
-    const output = await new Promise<string>((resolve) => {
+    const budgets = await readBudgetConfigFromWorkspaceConfig();
+
+    const executeWithBudget = async (timeBudgetMs: number) => {
+      const runner = new BudgetRunner<{ output: string; timedOut: boolean }>({
+        operationName: terminalName,
+        timeBudgetMs: timeBudgetMs + 1000
+      });
+
+      const result = await runner.run(() => this.runCommandWithStreamingOutput(command, cwd, timeBudgetMs));
+      if (result.status === 'completed' && result.value?.timedOut) {
+        return {
+          status: 'stopped' as const,
+          elapsedMs: result.elapsedMs,
+          stopReason: 'time' as const,
+          cpuDeltaMicros: result.cpuDeltaMicros,
+          value: result.value.output
+        };
+      }
+
+      return {
+        ...result,
+        value: result.value?.output
+      };
+    };
+
+    const budgetEnvelope = await runWithBudgetExtension({
+      operationName: terminalName,
+      initialTimeBudgetMs: budgets.indexTimeMs,
+      executeWithBudget,
+      requestAction: async ({ operationName, elapsedMs, nextBudgetMs }) => {
+        const action = await vscode.window.showWarningMessage(
+          vscode.l10n.t(
+            '⏱ {0} stopped at budget limit ({1}ms). [Show Partial] [Extend to {2}ms] [Cancel]',
+            operationName,
+            String(elapsedMs),
+            String(nextBudgetMs)
+          ),
+          vscode.l10n.t('Show Partial'),
+          vscode.l10n.t('Extend to {0}ms', String(nextBudgetMs)),
+          vscode.l10n.t('Cancel')
+        );
+
+        if (action === vscode.l10n.t('Extend to {0}ms', String(nextBudgetMs))) {
+          return 'extend';
+        }
+
+        if (action === vscode.l10n.t('Cancel')) {
+          return 'cancel';
+        }
+
+        return 'show-partial';
+      }
+    });
+    const output = budgetEnvelope.result.value ?? '';
+    if (budgetEnvelope.result.status === 'stopped') {
+      this.logger.warn(
+        'BUDGET',
+        `[BUDGET] ${terminalName} stopped at ${budgetEnvelope.result.elapsedMs}ms (budget ${budgetEnvelope.finalBudgetMs}ms).` +
+          ` CPU delta ${budgetEnvelope.result.cpuDeltaMicros}μs.`
+      );
+    }
+
+    const grouped = diagnosticsForOutput(output, workspaceFolder);
+    let diagnosticsCount = 0;
+    for (const entry of grouped.values()) {
+      this.diagnostics.set(entry.uri, entry.diagnostics);
+      diagnosticsCount += entry.diagnostics.length;
+    }
+
+    this.logger.info('DIAG', `Parsed ${diagnosticsCount} diagnostics from build output.`, Date.now() - startedAt);
+  }
+
+  private sanitizeCommandForLog(command: string): string {
+    return command.replace(/\b([A-Z_][A-Z0-9_]*)=("[^"]*"|'[^']*'|\S+)/g, '$1=<redacted>');
+  }
+
+  private runCommandWithStreamingOutput(
+    command: string,
+    cwd: string | undefined,
+    timeBudgetMs: number
+  ): Promise<{ output: string; timedOut: boolean }> {
+    return new Promise<{ output: string; timedOut: boolean }>((resolve) => {
       const child = spawn(command, {
         shell: true,
         cwd
@@ -110,6 +198,27 @@ export class BuildDiagnosticsRunner implements vscode.Disposable {
 
       let stdout = '';
       let stderr = '';
+      let resolved = false;
+
+      const finish = (timedOut: boolean): void => {
+        if (resolved) {
+          return;
+        }
+
+        resolved = true;
+        resolve({
+          output: `${stdout}\n${stderr}`,
+          timedOut
+        });
+      };
+
+      const timeoutHandle = setTimeout(() => {
+        try {
+          child.kill('SIGTERM');
+        } catch {
+        }
+        finish(true);
+      }, Math.max(1, timeBudgetMs));
 
       child.stdout.on('data', (chunk) => {
         const text = String(chunk);
@@ -125,21 +234,14 @@ export class BuildDiagnosticsRunner implements vscode.Disposable {
 
       child.on('error', (error) => {
         this.outputChannel.appendLine(`\n[Scala Lite] Failed to run command: ${error.message}`);
-        resolve(`${stdout}\n${stderr}`);
+        clearTimeout(timeoutHandle);
+        finish(false);
       });
 
       child.on('close', () => {
-        resolve(`${stdout}\n${stderr}`);
+        clearTimeout(timeoutHandle);
+        finish(false);
       });
     });
-
-    const grouped = diagnosticsForOutput(output, workspaceFolder);
-    let diagnosticsCount = 0;
-    for (const entry of grouped.values()) {
-      this.diagnostics.set(entry.uri, entry.diagnostics);
-      diagnosticsCount += entry.diagnostics.length;
-    }
-
-    this.logger.info('DIAG', `Parsed ${diagnosticsCount} diagnostics from build output.`, Date.now() - startedAt);
   }
 }

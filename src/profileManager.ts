@@ -12,6 +12,7 @@ export const COMMAND_EDIT_PROFILES = 'scalaLite.editProfiles';
 
 interface ScalaLiteWorkspaceConfig {
   readonly profiles?: TaskProfile[];
+  readonly activeProfile?: string;
   readonly [key: string]: unknown;
 }
 
@@ -64,6 +65,11 @@ export class ProfileManager implements vscode.Disposable {
     this.renderStatus();
   }
 
+  public async reloadFromWorkspaceConfig(): Promise<void> {
+    await this.loadProfiles();
+    this.renderStatus();
+  }
+
   public getActiveProfile(): TaskProfile {
     const selected = this.profiles.find((profile) => profile.name === this.activeProfileName);
     return selected ?? this.profiles[0] ?? generateDefaultProfile(this.getDetectedBuildTool());
@@ -103,7 +109,9 @@ export class ProfileManager implements vscode.Disposable {
       this.profiles = configuredProfiles;
     }
 
-    const configuredActive = vscode.workspace.getConfiguration('scalaLite').get<string>(ACTIVE_PROFILE_CONFIG_KEY);
+    const configuredFromFile = typeof config.activeProfile === 'string' ? config.activeProfile : undefined;
+    const configuredFromSettings = vscode.workspace.getConfiguration('scalaLite').get<string>(ACTIVE_PROFILE_CONFIG_KEY);
+    const configuredActive = configuredFromFile ?? configuredFromSettings;
     const fallbackName = this.profiles[0]?.name;
     this.activeProfileName = this.profiles.some((item) => item.name === configuredActive) ? configuredActive : fallbackName;
 

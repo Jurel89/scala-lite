@@ -73,7 +73,7 @@ async function pathExists(uri: vscode.Uri): Promise<boolean> {
   }
 }
 
-async function collectFolderFacts(workspaceFolder: vscode.WorkspaceFolder): Promise<FolderFacts> {
+async function _collectFolderFacts(workspaceFolder: vscode.WorkspaceFolder): Promise<FolderFacts> {
   const rootPath = workspaceFolder.uri.fsPath;
   const nodeModulesUri = vscode.Uri.file(path.join(rootPath, 'node_modules'));
   const scalafmtUri = vscode.Uri.file(path.join(rootPath, '.scalafmt.conf'));

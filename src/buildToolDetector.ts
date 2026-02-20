@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import {
   BuildTool,
-  DetectionSignals,
+  DetectionSignals as _DetectionSignals,
   inferBuildToolFromSignals
 } from './buildToolInference';
 

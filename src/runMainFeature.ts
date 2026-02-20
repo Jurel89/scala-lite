@@ -144,7 +144,7 @@ async function resolveRunCommandFromFallback(document: vscode.TextDocument, entr
 }
 
 export function registerRunMainCommands(getBuildToolForUri: (uri: vscode.Uri) => BuildTool): vscode.Disposable[] {
-  return registerRunMainCommandsWithExecutor({ getBuildToolForUri }, async (command, uri) => {
+  return registerRunMainCommandsWithExecutor({ getBuildToolForUri }, async (command, _uri) => {
     const terminal = terminalForRun();
     terminal.sendText(command, true);
   });

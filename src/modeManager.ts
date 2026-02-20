@@ -1,8 +1,8 @@
 import * as vscode from 'vscode';
 import {
   getModeDefinition,
-  getModeText,
-  MODES,
+  getModeText as _getModeText,
+  MODES as _MODES,
   WorkspaceMode
 } from './modePresentation';
 import {

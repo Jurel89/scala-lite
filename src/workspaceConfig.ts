@@ -22,7 +22,7 @@ export const WORKSPACE_CONFIG_TOP_LEVEL_KEYS = [
   'testFrameworkHints'
 ] as const;
 
-type WorkspaceConfigTopLevelKey = (typeof WORKSPACE_CONFIG_TOP_LEVEL_KEYS)[number];
+type _WorkspaceConfigTopLevelKey = (typeof WORKSPACE_CONFIG_TOP_LEVEL_KEYS)[number];
 
 export interface BudgetConfig {
   readonly searchTimeMs?: number;

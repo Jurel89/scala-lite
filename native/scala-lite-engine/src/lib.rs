@@ -250,7 +250,11 @@ pub fn index_files(files: &[FileInput]) -> Result<IndexSnapshot, EngineError> {
     })
 }
 
-pub fn query_symbols(index: &IndexSnapshot, query: &str, limit: usize) -> Result<Vec<SymbolEntry>, EngineError> {
+pub fn query_symbols(
+    index: &IndexSnapshot,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<SymbolEntry>, EngineError> {
     if query.trim().is_empty() {
         return Err(EngineError::EmptyQuery);
     }
@@ -281,7 +285,10 @@ pub fn query_symbols(index: &IndexSnapshot, query: &str, limit: usize) -> Result
         .collect())
 }
 
-pub fn get_diagnostics(index: &IndexSnapshot, file_path: &str) -> Result<Vec<DiagnosticEntry>, EngineError> {
+pub fn get_diagnostics(
+    index: &IndexSnapshot,
+    file_path: &str,
+) -> Result<Vec<DiagnosticEntry>, EngineError> {
     if file_path.trim().is_empty() {
         return Err(EngineError::EmptyFilePath);
     }
@@ -314,8 +321,8 @@ pub fn get_memory_usage(index: &IndexSnapshot) -> Result<MemoryUsage, EngineErro
 #[cfg(feature = "napi")]
 mod napi_bridge {
     use super::{
-        get_diagnostics, get_memory_usage, index_files, parse_file, query_symbols, DiagnosticEntry, FileInput,
-        IndexSnapshot, MemoryUsage, ParseFileResult, SymbolEntry,
+        get_diagnostics, get_memory_usage, index_files, parse_file, query_symbols, DiagnosticEntry,
+        FileInput, IndexSnapshot, MemoryUsage, ParseFileResult, SymbolEntry,
     };
     use napi::bindgen_prelude::{Error, Result};
     use napi_derive::napi;
@@ -363,8 +370,13 @@ mod napi_bridge {
                 })
                 .collect();
 
-            let snapshot = index_files(&mapped).map_err(|error| Error::from_reason(error.to_string()))?;
-            let symbol_total = snapshot.by_symbol.values().map(std::vec::Vec::len).sum::<usize>() as u32;
+            let snapshot =
+                index_files(&mapped).map_err(|error| Error::from_reason(error.to_string()))?;
+            let symbol_total = snapshot
+                .by_symbol
+                .values()
+                .map(std::vec::Vec::len)
+                .sum::<usize>() as u32;
             let mut guard = self
                 .inner
                 .lock()
@@ -379,7 +391,8 @@ mod napi_bridge {
                 .inner
                 .lock()
                 .map_err(|_| Error::from_reason("engine lock poisoned".to_string()))?;
-            query_symbols(&guard, &query, limit as usize).map_err(|error| Error::from_reason(error.to_string()))
+            query_symbols(&guard, &query, limit as usize)
+                .map_err(|error| Error::from_reason(error.to_string()))
         }
 
         #[napi]
@@ -388,7 +401,8 @@ mod napi_bridge {
                 .inner
                 .lock()
                 .map_err(|_| Error::from_reason("engine lock poisoned".to_string()))?;
-            get_diagnostics(&guard, &file_path).map_err(|error| Error::from_reason(error.to_string()))
+            get_diagnostics(&guard, &file_path)
+                .map_err(|error| Error::from_reason(error.to_string()))
         }
 
         #[napi]

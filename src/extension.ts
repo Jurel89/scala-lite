@@ -24,10 +24,19 @@ import { registerScalafmtFeature } from './scalafmtFeature';
 import { registerScalafixFeature } from './scalafixFeature';
 import { validateIgnoreRulesAtActivation } from './ignoreRules';
 import { registerWorkspaceConfigFeature } from './workspaceConfigFeature';
+import { registerWorkspaceDoctorFeature } from './workspaceDoctorFeature';
+import { getNativeEngine, initializeNativeEngine, registerNativeEngineFeature } from './nativeEngineState';
+import {
+  ACTIVATION_BUDGET_MS,
+  recordActivationDuration,
+  registerActivationPerformanceFeature
+} from './activationPerformance';
+import { auditMemoryBudgetForMode, registerMemoryBudgetFeature } from './memoryBudget';
 import { SymbolIndexManager } from './symbolIndex';
 import { GoToDefinitionProvider } from './goToDefinitionFeature';
 import { WorkspaceSymbolSearchProvider } from './workspaceSymbolFeature';
 import { FindUsagesProvider } from './findUsagesFeature';
+import { SyntaxDiagnosticsController } from './syntaxDiagnosticsFeature';
 
 const IDLE_AUDIT_DURATION_MS = 30_000;
 
@@ -61,7 +70,19 @@ async function detectWorkspaceBuildTools(
     return [];
   }
 
-  const results = await session.detectAll(folders, force, vscode.workspace);
+  let results: BuildToolDetectionResult[];
+  try {
+    results = await session.detectAll(folders, force, vscode.workspace);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.warn('CONFIG', `Build-tool detection failed. Falling back to none. ${message}`);
+    vscode.window.setStatusBarMessage(vscode.l10n.t('⚠ Fallback mode (slower)'), 5000);
+    results = folders.map((workspaceFolder) => ({
+      workspaceFolder,
+      buildTool: 'none' as BuildTool
+    }));
+  }
+
   for (const result of results) {
     state.set(result.workspaceFolder.uri.toString(), result.buildTool);
   }
@@ -79,6 +100,7 @@ async function onModeChanged(
 ): Promise<void> {
   logger.info('ACTIVATE', `Switching mode to ${mode}.`);
   await symbolIndexManager.setMode(mode);
+  auditMemoryBudgetForMode(mode, logger);
 
   if (mode === 'A') {
     return;
@@ -88,6 +110,7 @@ async function onModeChanged(
 }
 
 export function activate(context: vscode.ExtensionContext): void {
+  const activationStartedAt = Date.now();
   const logger = new StructuredLogger('INFO');
   void readLogLevelFromWorkspaceConfig().then((level) => {
     if (level) {
@@ -96,6 +119,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   });
   void validateIgnoreRulesAtActivation(logger);
+  initializeNativeEngine(logger);
   logger.info('ACTIVATE', 'Extension activation started.');
 
   const buildToolDetectionSession = new BuildToolDetectionSession();
@@ -130,11 +154,12 @@ export function activate(context: vscode.ExtensionContext): void {
   };
 
   const profileManager = new ProfileManager(context, getPrimaryDetectedBuildTool);
-  const symbolIndexManager = new SymbolIndexManager(logger);
+  const symbolIndexManager = new SymbolIndexManager(logger, () => getNativeEngine());
   symbolIndexManager.initialize(context);
   const definitionProvider = new GoToDefinitionProvider(symbolIndexManager, () => activeMode, logger);
   const workspaceSymbolProvider = new WorkspaceSymbolSearchProvider(symbolIndexManager, () => activeMode);
-  const referenceProvider = new FindUsagesProvider(() => activeMode);
+  const referenceProvider = new FindUsagesProvider(symbolIndexManager, () => activeMode);
+  const syntaxDiagnosticsController = new SyntaxDiagnosticsController(symbolIndexManager, () => activeMode, logger);
 
   const editorAccessDisposable = vscode.window.onDidChangeActiveTextEditor((editor) => {
     if (editor) {
@@ -158,6 +183,7 @@ export function activate(context: vscode.ExtensionContext): void {
     onModeChanged: async (mode) => {
       activeMode = mode;
       await onModeChanged(mode, buildToolDetectionSession, buildToolState, logger, symbolIndexManager);
+      await syntaxDiagnosticsController.refreshOpenDocuments();
     },
     getBuildIntegrationLabel: () => getPrimaryDetectedBuildTool(),
     onBuildIntegrationChanged: async (enabled) => {
@@ -243,6 +269,34 @@ export function activate(context: vscode.ExtensionContext): void {
     profileManager,
     getDefaultBuildTool: getPrimaryDetectedBuildTool
   });
+  const workspaceDoctorDisposables = registerWorkspaceDoctorFeature({
+    getBuildTool: getPrimaryDetectedBuildTool,
+    getPrioritizedFolderRoots: () => {
+      const symbolCountsByFolder = new Map<string, number>();
+      for (const symbol of symbolIndexManager.getAllSymbols()) {
+        const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(symbol.filePath));
+        if (!folder) {
+          continue;
+        }
+
+        const key = folder.uri.fsPath;
+        symbolCountsByFolder.set(key, (symbolCountsByFolder.get(key) ?? 0) + 1);
+      }
+
+      return Array.from(symbolCountsByFolder.entries())
+        .sort((left, right) => right[1] - left[1])
+        .map(([folderPath]) => folderPath);
+    },
+    onPrioritizationApplied: (prioritizedFolderCount, totalFolderCount) => {
+      logger.info(
+        'DIAG',
+        `Workspace Doctor prioritized folder scan order for ${prioritizedFolderCount}/${totalFolderCount} folder(s).`
+      );
+    }
+  });
+  const nativeEngineDisposables = registerNativeEngineFeature(logger);
+  const activationPerformanceDisposables = registerActivationPerformanceFeature();
+  const memoryBudgetDisposables = registerMemoryBudgetFeature(() => activeMode, logger);
 
   context.subscriptions.push(
     runIdleAuditDisposable,
@@ -254,9 +308,14 @@ export function activate(context: vscode.ExtensionContext): void {
     buildDiagnosticsRunner,
     profileManager,
     symbolIndexManager,
+    syntaxDiagnosticsController,
     modeManager,
     ...scalafmtDisposables,
     ...scalafixDisposables,
+    ...workspaceDoctorDisposables,
+    ...nativeEngineDisposables,
+    ...activationPerformanceDisposables,
+    ...memoryBudgetDisposables,
     ...workspaceConfigDisposables,
     ...runMainCommandDisposables,
     ...runTestCommandDisposables
@@ -272,6 +331,16 @@ export function activate(context: vscode.ExtensionContext): void {
     await profileManager.initialize();
   })();
   void modeManager.initialize();
+  void syntaxDiagnosticsController.refreshOpenDocuments();
+  const activationElapsed = Date.now() - activationStartedAt;
+  recordActivationDuration(activationElapsed, logger);
+  if (activationElapsed > ACTIVATION_BUDGET_MS) {
+    vscode.window.setStatusBarMessage(
+      vscode.l10n.t('Activation exceeded budget: {0}ms (> {1}ms).', String(activationElapsed), String(ACTIVATION_BUDGET_MS)),
+      4000
+    );
+  }
+
   logger.info('ACTIVATE', 'Extension activation completed.');
 }
 

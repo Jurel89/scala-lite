@@ -2,7 +2,6 @@ import * as vscode from 'vscode';
 import { BuildTool } from './buildToolInference';
 import {
   applyProfileCommandShape,
-  renderTemplate,
   TaskProfile
 } from './profileCore';
 import {
@@ -10,10 +9,12 @@ import {
   createSuiteTestCommand,
   detectTestCases,
   detectTestSuites,
+  inferSuiteFqn,
   supportsIndividualTargeting,
   TestFramework,
   TestSuiteMatch
 } from './runTestLogic';
+import { getBuildAdapterRegistry } from './buildAdapters';
 
 export const COMMAND_RUN_TEST_SUITE = 'scalaLite.runTestSuite';
 export const COMMAND_RUN_TEST_CASE = 'scalaLite.runTestCase';
@@ -115,11 +116,12 @@ export class RunTestCodeLensProvider implements vscode.CodeLensProvider {
       const rawSuiteCommand = createSuiteTestCommand(buildTool, document.uri.fsPath, suite.suiteName, text, millModule);
       const suiteCommand = profile
         ? applyProfileCommandShape(
-            renderTemplate(profile.testCommand || rawSuiteCommand, {
-              suiteName: suite.suiteName,
-              filePath: document.uri.fsPath,
-              jvmOpts: profile.jvmOpts.join(' ')
-            }).trim(),
+            getBuildAdapterRegistry().resolveFor(buildTool, profile).runTestCommand(
+              inferSuiteFqn(text, suite.suiteName),
+              undefined,
+              document.uri.fsPath,
+              profile
+            ),
             profile
           )
         : rawSuiteCommand;
@@ -177,12 +179,12 @@ export class RunTestCodeLensProvider implements vscode.CodeLensProvider {
         );
         const testCommand = rawTestCommand && profile
           ? applyProfileCommandShape(
-              renderTemplate(rawTestCommand, {
-                suiteName: suite.suiteName,
-                testName: testCase.testName,
-                filePath: document.uri.fsPath,
-                jvmOpts: profile.jvmOpts.join(' ')
-              }).trim(),
+              getBuildAdapterRegistry().resolveFor(buildTool, profile).runTestCommand(
+                inferSuiteFqn(text, suite.suiteName),
+                testCase.testName,
+                document.uri.fsPath,
+                profile
+              ),
               profile
             )
           : rawTestCommand;
@@ -240,11 +242,12 @@ export function registerRunTestCommandsWithExecutor(
     const rawCommand = createSuiteTestCommand(buildTool, document.uri.fsPath, suite.suiteName, text, inferMillModule(document));
     const command = profile
       ? applyProfileCommandShape(
-          renderTemplate(profile.testCommand || rawCommand, {
-            suiteName: suite.suiteName,
-            filePath: document.uri.fsPath,
-            jvmOpts: profile.jvmOpts.join(' ')
-          }).trim(),
+          getBuildAdapterRegistry().resolveFor(buildTool, profile).runTestCommand(
+            inferSuiteFqn(text, suite.suiteName),
+            undefined,
+            document.uri.fsPath,
+            profile
+          ),
           profile
         )
       : rawCommand;
@@ -282,12 +285,12 @@ export function registerRunTestCommandsWithExecutor(
 
     const command = profile
       ? applyProfileCommandShape(
-          renderTemplate(rawCommand, {
-            suiteName: suite.suiteName,
-            testName: testCase.testName,
-            filePath: document.uri.fsPath,
-            jvmOpts: profile.jvmOpts.join(' ')
-          }).trim(),
+          getBuildAdapterRegistry().resolveFor(buildTool, profile).runTestCommand(
+            inferSuiteFqn(text, suite.suiteName),
+            testCase.testName,
+            document.uri.fsPath,
+            profile
+          ),
           profile
         )
       : rawCommand;

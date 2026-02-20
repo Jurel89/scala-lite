@@ -107,9 +107,17 @@ async function runResolvedScalafix(
   args: string[],
   input: string,
   cwd: string,
-  timeoutMs: number
+  timeoutMs: number,
+  token?: vscode.CancellationToken
 ): Promise<{ status: 'ok' | 'timeout' | 'error'; stdout?: string; stderr?: string; error?: string }> {
   let child: ReturnType<typeof spawn> | undefined;
+
+  const cancellation = token?.onCancellationRequested(() => {
+    try {
+      child?.kill();
+    } catch {
+    }
+  });
 
   const result = await runScalafixWithTimeout(async () => {
     return new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
@@ -144,6 +152,12 @@ async function runResolvedScalafix(
       child?.kill();
     } catch {
     }
+  }
+
+  cancellation?.dispose();
+
+  if (token?.isCancellationRequested) {
+    return { status: 'error', error: vscode.l10n.t('Scala Lite operation cancelled.') };
   }
 
   return result;
@@ -220,12 +234,22 @@ export function registerScalafixFeature(logger: StructuredLogger): vscode.Dispos
 
     const startedAt = Date.now();
     const originalText = document.getText();
-    const execution = await runResolvedScalafix(
-      resolution.command,
-      resolution.args,
-      originalText,
-      folder.uri.fsPath,
-      timeoutMs
+    const execution = await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: 'Scala Lite: Scalafix',
+        cancellable: true
+      },
+      async (_progress, token) => {
+        return runResolvedScalafix(
+          resolution.command,
+          resolution.args,
+          originalText,
+          folder.uri.fsPath,
+          timeoutMs,
+          token
+        );
+      }
     );
 
     if (execution.status === 'timeout') {
@@ -237,6 +261,11 @@ export function registerScalafixFeature(logger: StructuredLogger): vscode.Dispos
     }
 
     if (execution.status === 'error' || typeof execution.stdout !== 'string') {
+      if (execution.error === vscode.l10n.t('Scala Lite operation cancelled.')) {
+        logger.info('LINT', 'Scalafix operation cancelled by user.', Date.now() - startedAt);
+        return;
+      }
+
       logger.error('LINT', `Scalafix failed: ${execution.error ?? 'Unknown error'}`, Date.now() - startedAt);
       return;
     }

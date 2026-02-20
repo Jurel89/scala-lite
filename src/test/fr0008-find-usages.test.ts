@@ -39,6 +39,8 @@ test('FR-0008: search respects ignore rules and file guards', () => {
   const source = readSource('src/findUsagesFeature.ts');
   assert.equal(source.includes('resolveWorkspaceIgnoreRules'), true);
   assert.equal(source.includes('new Minimatch'), true);
+  assert.equal(source.includes('prioritizeCandidateFiles'), true);
+  assert.equal(source.includes('this.symbolIndexManager.searchSymbols(symbol, 400, token)'), true);
   assert.equal(source.includes("extension === '.class'"), true);
   assert.equal(source.includes('MAX_FILE_SIZE_BYTES'), true);
 });
@@ -55,7 +57,7 @@ test('FR-0008: provider is wired through ModeManager and extension activation', 
   const extensionSource = readSource('src/extension.ts');
   assert.equal(modeManagerSource.includes('readonly referenceProvider?: vscode.ReferenceProvider;'), true);
   assert.equal(modeManagerSource.includes('registerReferenceProvider'), true);
-  assert.equal(extensionSource.includes('new FindUsagesProvider(() => activeMode)'), true);
+  assert.equal(extensionSource.includes('new FindUsagesProvider(symbolIndexManager, () => activeMode)'), true);
   assert.equal(extensionSource.includes('referenceProvider'), true);
 });
 

@@ -77,6 +77,8 @@ interface ScalaLiteWorkspaceConfig {
   readonly [key: string]: unknown;
 }
 
+const invalidJsonWarnings = new Set<string>();
+
 function getPrimaryWorkspaceFolder(): vscode.WorkspaceFolder | undefined {
   return vscode.workspace.workspaceFolders?.[0];
 }
@@ -91,8 +93,18 @@ async function readConfig(folder: vscode.WorkspaceFolder): Promise<ScalaLiteWork
   try {
     const raw = await vscode.workspace.fs.readFile(configUri);
     const parsed = JSON.parse(Buffer.from(raw).toString('utf8')) as ScalaLiteWorkspaceConfig;
+    invalidJsonWarnings.delete(configUri.toString());
     return parsed;
-  } catch {
+  } catch (error) {
+    const key = configUri.toString();
+    if (!invalidJsonWarnings.has(key)) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes('JSON')) {
+        invalidJsonWarnings.add(key);
+        void vscode.window.showWarningMessage(vscode.l10n.t('Configuration file is invalid JSON. Defaults are being used until fixed.'));
+      }
+    }
+
     return {};
   }
 }

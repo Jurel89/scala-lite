@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'node:path';
 import { Minimatch } from 'minimatch';
 import { WorkspaceMode } from './modePresentation';
+import { SymbolIndexManager } from './symbolIndex';
 import { resolveWorkspaceIgnoreRules } from './ignoreRules';
 import {
   readBudgetConfigFromWorkspaceConfig,
@@ -145,9 +146,11 @@ async function resolveCandidateFiles(document: vscode.TextDocument, scope: Searc
 }
 
 export class FindUsagesProvider implements vscode.ReferenceProvider {
+  private readonly symbolIndexManager: SymbolIndexManager;
   private readonly getMode: () => WorkspaceMode;
 
-  public constructor(getMode: () => WorkspaceMode) {
+  public constructor(symbolIndexManager: SymbolIndexManager, getMode: () => WorkspaceMode) {
+    this.symbolIndexManager = symbolIndexManager;
     this.getMode = getMode;
   }
 
@@ -227,11 +230,12 @@ export class FindUsagesProvider implements vscode.ReferenceProvider {
     const ignoreRules = await resolveWorkspaceIgnoreRules();
     const ignoreMatchers = ignoreRules.effectivePatterns.map((pattern) => new Minimatch(pattern, { dot: true }));
     const fileUris = await resolveCandidateFiles(document, scope);
+    const prioritizedFileUris = await this.prioritizeCandidateFiles(fileUris, symbol, token);
     const regex = new RegExp(`\\b${escapeRegExp(symbol)}\\b`);
     const locations: vscode.Location[] = [];
     let truncated = false;
 
-    for (const fileUri of fileUris) {
+    for (const fileUri of prioritizedFileUris) {
       if (token.isCancellationRequested) {
         return { results: locations, truncated: false };
       }
@@ -291,5 +295,44 @@ export class FindUsagesProvider implements vscode.ReferenceProvider {
     }
 
     return { results: locations, truncated };
+  }
+
+  private async prioritizeCandidateFiles(
+    candidateFiles: readonly vscode.Uri[],
+    symbol: string,
+    token: vscode.CancellationToken
+  ): Promise<readonly vscode.Uri[]> {
+    if (candidateFiles.length <= 1 || token.isCancellationRequested) {
+      return candidateFiles;
+    }
+
+    const nativeMatches = await this.symbolIndexManager.searchSymbols(symbol, 400, token);
+    const prioritizedPathSet = new Set(
+      nativeMatches
+        .filter((match) => match.symbolName === symbol)
+        .map((match) => path.resolve(match.filePath))
+    );
+
+    if (prioritizedPathSet.size === 0) {
+      return candidateFiles;
+    }
+
+    const prioritized: vscode.Uri[] = [];
+    const remaining: vscode.Uri[] = [];
+
+    for (const fileUri of candidateFiles) {
+      if (prioritizedPathSet.has(path.resolve(fileUri.fsPath))) {
+        prioritized.push(fileUri);
+        continue;
+      }
+
+      remaining.push(fileUri);
+    }
+
+    if (prioritized.length === 0) {
+      return candidateFiles;
+    }
+
+    return [...prioritized, ...remaining];
   }
 }

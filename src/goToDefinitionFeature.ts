@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as path from 'node:path';
 import { Minimatch } from 'minimatch';
 import { WorkspaceMode } from './modePresentation';
 import { SymbolIndexManager } from './symbolIndex';
@@ -60,6 +61,7 @@ export class GoToDefinitionProvider implements vscode.DefinitionProvider {
 
     const tier1 = this.findSameFileDefinition(document, symbolName, position.line);
     if (tier1) {
+      this.showBadge(vscode.l10n.t('Exact'));
       return tier1;
     }
 
@@ -68,15 +70,15 @@ export class GoToDefinitionProvider implements vscode.DefinitionProvider {
       return [];
     }
 
-    const tier2 = this.findIndexedDefinition(document, symbolName);
+    const tier2 = await this.findIndexedDefinition(document, symbolName, token);
     if (tier2) {
-      this.showBadge(vscode.l10n.t('📍 Likely match'));
+      this.showBadge(vscode.l10n.t('📍 Likely'));
       return tier2;
     }
 
     const tier3 = await this.findTextSearchDefinition(document, symbolName, token);
     if (tier3) {
-      this.showBadge(vscode.l10n.t('🔍 Text search'));
+      this.showBadge(vscode.l10n.t('🔍 Text Search'));
       return tier3;
     }
 
@@ -107,11 +109,20 @@ export class GoToDefinitionProvider implements vscode.DefinitionProvider {
     return toLocation(sameFile.filePath, sameFile.lineNumber);
   }
 
-  private findIndexedDefinition(document: vscode.TextDocument, symbolName: string): vscode.Location | undefined {
+  private async findIndexedDefinition(
+    document: vscode.TextDocument,
+    symbolName: string,
+    token: vscode.CancellationToken
+  ): Promise<vscode.Location | undefined> {
+    const nativeMatches = await this.symbolIndexManager.searchSymbols(symbolName, 200, token);
     const currentPackage = parsePackageName(document);
-    const candidates = this.symbolIndexManager
+    const exactLocalCandidates = this.symbolIndexManager
       .getAllSymbols()
       .filter((symbol) => symbol.symbolName === symbolName);
+
+    const candidates = exactLocalCandidates.length > 0
+      ? exactLocalCandidates
+      : nativeMatches.filter((symbol) => symbol.symbolName === symbolName);
 
     if (candidates.length === 0) {
       return undefined;
@@ -147,9 +158,10 @@ export class GoToDefinitionProvider implements vscode.DefinitionProvider {
     const pattern = buildDefinitionPattern(symbolName);
 
     const fileUris = await vscode.workspace.findFiles('**/*.{scala,sbt}', undefined, 5000);
+    const prioritizedFileUris = await this.prioritizeTextSearchFiles(fileUris, symbolName, token);
     const matches: Array<{ readonly uri: vscode.Uri; readonly line: number; readonly packageName: string; readonly preview: string }> = [];
 
-    for (const fileUri of fileUris) {
+    for (const fileUri of prioritizedFileUris) {
       if (token.isCancellationRequested) {
         return undefined;
       }
@@ -228,6 +240,45 @@ export class GoToDefinitionProvider implements vscode.DefinitionProvider {
     }
 
     return new vscode.Location(picked.entry.uri, new vscode.Position(picked.entry.line, 0));
+  }
+
+  private async prioritizeTextSearchFiles(
+    fileUris: readonly vscode.Uri[],
+    symbolName: string,
+    token: vscode.CancellationToken
+  ): Promise<readonly vscode.Uri[]> {
+    if (fileUris.length <= 1 || token.isCancellationRequested) {
+      return fileUris;
+    }
+
+    const nativeMatches = await this.symbolIndexManager.searchSymbols(symbolName, 400, token);
+    const prioritizedPathSet = new Set(
+      nativeMatches
+        .filter((symbol) => symbol.symbolName === symbolName)
+        .map((symbol) => path.resolve(symbol.filePath))
+    );
+
+    if (prioritizedPathSet.size === 0) {
+      return fileUris;
+    }
+
+    const prioritized: vscode.Uri[] = [];
+    const remaining: vscode.Uri[] = [];
+
+    for (const fileUri of fileUris) {
+      if (prioritizedPathSet.has(path.resolve(fileUri.fsPath))) {
+        prioritized.push(fileUri);
+        continue;
+      }
+
+      remaining.push(fileUri);
+    }
+
+    if (prioritized.length === 0) {
+      return fileUris;
+    }
+
+    return [...prioritized, ...remaining];
   }
 
   private showBadge(message: string): void {

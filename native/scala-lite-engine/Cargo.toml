@@ -1,0 +1,26 @@
+[package]
+name = "scala-lite-engine"
+version = "0.1.0"
+edition = "2021"
+description = "Rust-native indexing engine for Scala Lite"
+license = "UNLICENSED"
+keywords = ["scala", "indexing", "vscode", "napi"]
+categories = ["text-processing", "development-tools"]
+
+[lib]
+name = "scala_lite_engine"
+crate-type = ["rlib", "cdylib"]
+
+[features]
+default = []
+napi = ["dep:napi", "dep:napi-derive"]
+
+[dependencies]
+rayon = "1.10"
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "2.0"
+napi = { version = "2.16", optional = true, default-features = false, features = ["napi8"] }
+napi-derive = { version = "2.16", optional = true }
+
+[dev-dependencies]
+serde_json = "1.0"

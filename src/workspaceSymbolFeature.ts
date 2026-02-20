@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as path from 'node:path';
 import { WorkspaceMode } from './modePresentation';
 import { IndexedSymbol, SymbolIndexManager } from './symbolIndex';
 
@@ -89,10 +90,10 @@ export class WorkspaceSymbolSearchProvider implements vscode.WorkspaceSymbolProv
     this.fileRecency.set(uri.fsPath, Date.now());
   }
 
-  public provideWorkspaceSymbols(
+  public async provideWorkspaceSymbols(
     query: string,
     token: vscode.CancellationToken
-  ): vscode.ProviderResult<vscode.SymbolInformation[]> {
+  ): Promise<vscode.SymbolInformation[]> {
     if (token.isCancellationRequested) {
       return [];
     }
@@ -103,7 +104,9 @@ export class WorkspaceSymbolSearchProvider implements vscode.WorkspaceSymbolProv
     }
 
     const normalizedQuery = query.trim().toLowerCase();
-    const allSymbols = this.symbolIndexManager.getAllSymbols();
+    const allSymbols = normalizedQuery.length === 0
+      ? this.symbolIndexManager.getAllSymbols()
+      : await this.symbolIndexManager.searchSymbols(normalizedQuery, 300, token);
     const ranked: RankedSymbol[] = [];
 
     for (const symbol of allSymbols) {
@@ -143,12 +146,26 @@ export class WorkspaceSymbolSearchProvider implements vscode.WorkspaceSymbolProv
 
     return ranked.slice(0, 200).map((entry) => {
       const symbol = entry.symbol;
+      const modulePrefix = mode === 'C' ? this.resolveModulePrefix(symbol.filePath) : undefined;
+      const symbolLabel = modulePrefix ? `${modulePrefix}: ${symbol.symbolName}` : symbol.symbolName;
       return new vscode.SymbolInformation(
-        symbol.symbolName,
+        symbolLabel,
         toSymbolKind(symbol.symbolKind),
         symbol.containerName ?? '',
         new vscode.Location(vscode.Uri.file(symbol.filePath), new vscode.Position(Math.max(0, symbol.lineNumber - 1), 0))
       );
     });
+  }
+
+  private resolveModulePrefix(filePath: string): string {
+    const relative = vscode.workspace.asRelativePath(filePath, false);
+    const normalized = relative.replace(/^[^/]+\//, '');
+    const firstSegment = normalized.split('/')[0];
+    if (firstSegment && firstSegment.length > 0) {
+      return firstSegment;
+    }
+
+    const directoryName = path.basename(path.dirname(filePath));
+    return directoryName || 'module';
   }
 }

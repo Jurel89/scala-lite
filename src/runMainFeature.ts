@@ -2,7 +2,6 @@ import * as vscode from 'vscode';
 import { BuildTool } from './buildToolInference';
 import {
   applyProfileCommandShape,
-  renderTemplate,
   TaskProfile
 } from './profileCore';
 import {
@@ -12,6 +11,7 @@ import {
   inferFqnForEntry,
   inferPackageName
 } from './runMainLogic';
+import { getBuildAdapterRegistry } from './buildAdapters';
 
 export const COMMAND_RUN_MAIN_ENTRY = 'scalaLite.runMainEntry';
 export const COMMAND_COPY_RUN_COMMAND = 'scalaLite.copyRunCommand';
@@ -53,12 +53,8 @@ export function createRunCommand(
   const mainClass = inferFqnForEntry(packageName, entry);
 
   if (profile) {
-    const templated = renderTemplate(profile.runCommand, {
-      mainClass,
-      filePath: document.uri.fsPath,
-      jvmOpts: profile.jvmOpts.join(' ')
-    }).trim();
-
+    const adapter = getBuildAdapterRegistry().resolveFor(buildTool, profile);
+    const templated = adapter.runMainCommand(mainClass ?? '', document.uri.fsPath, profile);
     return applyProfileCommandShape(templated, profile);
   }
 

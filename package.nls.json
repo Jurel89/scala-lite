@@ -1,0 +1,18 @@
+{
+  "commandCategory.scalaLite": "Scala Lite",
+  "command.scalaLite.runIdleCpuAudit.title": "Run Idle CPU Audit (30s)",
+  "command.scalaLite.reDetectBuildTool.title": "Re-detect Build Tool",
+  "command.scalaLite.switchModeA.title": "Switch to Mode A",
+  "command.scalaLite.switchModeB.title": "Switch to Mode B",
+  "command.scalaLite.switchModeC.title": "Switch to Mode C",
+  "command.scalaLite.runMainEntry.title": "Run Main Entry",
+  "command.scalaLite.copyRunCommand.title": "Copy Run Command",
+  "command.scalaLite.runTestSuite.title": "Run Test Suite",
+  "command.scalaLite.runTestCase.title": "Run Test Case",
+  "command.scalaLite.copyTestCommand.title": "Copy Test Command",
+  "command.scalaLite.copyDiagnosticBundle.title": "Copy Diagnostic Bundle",
+  "command.scalaLite.switchProfile.title": "Switch Profile",
+  "command.scalaLite.editProfiles.title": "Edit Profiles",
+  "command.scalaLite.runScalafix.title": "Run Scalafix",
+  "configuration.scalaLite.activeProfile.description": "Active Scala Lite task profile name for this workspace."
+}

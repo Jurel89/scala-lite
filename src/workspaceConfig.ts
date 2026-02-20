@@ -308,10 +308,16 @@ export async function readDiagnosticsConfigFromWorkspaceConfig(): Promise<Effect
 
   const config = await readConfig(folder);
   const diagnostics = config.diagnostics ?? {};
+  const enabled = typeof diagnostics.enabled === 'boolean'
+    ? diagnostics.enabled
+    : true;
+  const trigger = diagnostics.trigger === 'onType' || diagnostics.trigger === 'onSave'
+    ? diagnostics.trigger
+    : 'onSave';
 
   return {
-    enabled: diagnostics.enabled ?? true,
-    trigger: diagnostics.trigger ?? 'onSave'
+    enabled,
+    trigger
   };
 }
 

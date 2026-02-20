@@ -35,8 +35,12 @@
         {
           "name": "string.interpolated.scala",
           "begin": "\\b(?:s|f|raw)\"",
-          "end": "\"",
+          "end": "(?<!\\\\)\"",
           "patterns": [
+            {
+              "name": "constant.character.escape.scala",
+              "match": "\\\\."
+            },
             {
               "name": "variable.interpolation.scala",
               "match": "\\$\\{[^}]+\\}|\\$[A-Za-z_][A-Za-z0-9_]*"
@@ -46,7 +50,13 @@
         {
           "name": "string.quoted.double.scala",
           "begin": "\"",
-          "end": "\""
+          "end": "(?<!\\\\)\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.scala",
+              "match": "\\\\."
+            }
+          ]
         },
         {
           "name": "string.quoted.single.scala",

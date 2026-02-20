@@ -36,6 +36,8 @@ test('FR-0015: diagnostics config reader returns effective defaults', () => {
   assert.equal(source.includes('readDiagnosticsConfigFromWorkspaceConfig'), true);
   assert.equal(source.includes("enabled: true"), true);
   assert.equal(source.includes("trigger: 'onSave'"), true);
+  assert.equal(source.includes("typeof diagnostics.enabled === 'boolean'"), true);
+  assert.equal(source.includes("diagnostics.trigger === 'onType' || diagnostics.trigger === 'onSave'"), true);
 });
 
 test('FR-0015: syntax diagnostics are not hard-disabled in Mode A', () => {

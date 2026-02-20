@@ -21,6 +21,7 @@ test('FR-0012: launch.json generation uses java attach configurations', () => {
   assert.equal(source.includes('Scala Lite: sbt Run (Attach)'), true);
   assert.equal(source.includes('Scala Lite: sbt Test (Attach)'), true);
   assert.equal(source.includes('Scala Lite: scala-cli Run (Attach)'), true);
+  assert.equal(source.includes("preLaunchTask: 'sbt -jvm-debug 5005 runMain'"), false);
 });
 
 test('FR-0012: debug codelens is provided next to run codelens', () => {
@@ -35,6 +36,15 @@ test('FR-0012: missing java debug adapter prompts install action', () => {
   assert.equal(source.includes("JAVA_DEBUG_EXTENSION_ID = 'vscjava.vscode-java-debug'"), true);
   assert.equal(source.includes("Java Debug Adapter extension required."), true);
   assert.equal(source.includes("workbench.extensions.installExtension"), true);
+  assert.equal(source.includes('waitForExtensionAvailable'), true);
+  assert.equal(source.includes('Reload Window'), true);
+});
+
+test('FR-0012: launch.json handling avoids overwriting invalid existing files', () => {
+  const source = readSource('src/runMainFeature.ts');
+  assert.equal(source.includes('isFileNotFoundError'), true);
+  assert.equal(source.includes('contains invalid JSON'), true);
+  assert.equal(source.includes('Unable to read existing .vscode/launch.json'), true);
 });
 
 test('FR-0012: debug command starts attach debugging after launching process', () => {

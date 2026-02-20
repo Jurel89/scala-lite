@@ -56,11 +56,121 @@ function selectorForScala(): vscode.DocumentSelector {
 
 interface OutlineContainer {
   readonly symbol: vscode.DocumentSymbol;
-  readonly closeDepth: number;
+  readonly closeDepth?: number;
+  readonly closeIndent?: number;
+}
+
+interface OutlineLexState {
+  inBlockComment: boolean;
+  inTripleString: boolean;
+}
+
+interface LineStructure {
+  readonly sanitizedText: string;
+  readonly openBraces: number;
+  readonly closeBraces: number;
 }
 
 function countOccurrences(value: string, token: string): number {
   return value.split(token).length - 1;
+}
+
+function lexLineForStructure(text: string, state: OutlineLexState): LineStructure {
+  const sanitized: string[] = [];
+  let index = 0;
+
+  while (index < text.length) {
+    if (state.inBlockComment) {
+      if (text.startsWith('*/', index)) {
+        state.inBlockComment = false;
+        sanitized.push('  ');
+        index += 2;
+        continue;
+      }
+
+      sanitized.push(' ');
+      index += 1;
+      continue;
+    }
+
+    if (state.inTripleString) {
+      if (text.startsWith('"""', index)) {
+        state.inTripleString = false;
+        sanitized.push('   ');
+        index += 3;
+        continue;
+      }
+
+      sanitized.push(' ');
+      index += 1;
+      continue;
+    }
+
+    if (text.startsWith('//', index)) {
+      break;
+    }
+
+    if (text.startsWith('/*', index)) {
+      state.inBlockComment = true;
+      sanitized.push('  ');
+      index += 2;
+      continue;
+    }
+
+    if (text.startsWith('"""', index)) {
+      state.inTripleString = true;
+      sanitized.push('   ');
+      index += 3;
+      continue;
+    }
+
+    const char = text[index];
+    if (char === '"') {
+      sanitized.push(' ');
+      index += 1;
+      while (index < text.length) {
+        const current = text[index];
+        sanitized.push(' ');
+        index += 1;
+        if (current === '"' && text[index - 2] !== '\\') {
+          break;
+        }
+      }
+      continue;
+    }
+
+    if (char === '\'') {
+      sanitized.push(' ');
+      index += 1;
+      while (index < text.length) {
+        const current = text[index];
+        sanitized.push(' ');
+        index += 1;
+        if (current === '\'' && text[index - 2] !== '\\') {
+          break;
+        }
+      }
+      continue;
+    }
+
+    sanitized.push(char);
+    index += 1;
+  }
+
+  const sanitizedText = sanitized.join('');
+  return {
+    sanitizedText,
+    openBraces: countOccurrences(sanitizedText, '{'),
+    closeBraces: countOccurrences(sanitizedText, '}')
+  };
+}
+
+function opensIndentationScope(keyword: string, sanitizedLine: string): boolean {
+  if (!isContainerKeyword(keyword)) {
+    return false;
+  }
+
+  return /:\s*$/.test(sanitizedLine.trim());
 }
 
 function keywordToSymbolKind(keyword: string): vscode.SymbolKind {
@@ -106,6 +216,10 @@ function extractDocumentSymbols(document: vscode.TextDocument): vscode.DocumentS
   const imports: vscode.DocumentSymbol[] = [];
   const importLines: number[] = [];
   const containers: OutlineContainer[] = [];
+  const lexState: OutlineLexState = {
+    inBlockComment: false,
+    inTripleString: false
+  };
   let braceDepth = 0;
 
   const declarationPattern = /^\s*(?:(?:export\s+)?(?:(package)\s+([\w.]+)|(import)\s+(.+)|((?:case\s+class|sealed\s+trait|class|object|trait|enum|def|val|var|type|given))\s+([\w$]+)))/;
@@ -120,8 +234,18 @@ function extractDocumentSymbols(document: vscode.TextDocument): vscode.DocumentS
     symbols.push(symbol);
   };
 
-  const closeContainers = (lineNumber: number): void => {
-    while (containers.length > 0 && braceDepth < containers[containers.length - 1].closeDepth) {
+  const closeContainers = (lineNumber: number, currentIndent?: number): void => {
+    while (containers.length > 0) {
+      const top = containers[containers.length - 1];
+      const shouldCloseByDepth = typeof top.closeDepth === 'number' && braceDepth < top.closeDepth;
+      const shouldCloseByIndent = typeof top.closeIndent === 'number'
+        && typeof currentIndent === 'number'
+        && currentIndent <= top.closeIndent;
+
+      if (!shouldCloseByDepth && !shouldCloseByIndent) {
+        break;
+      }
+
       const closed = containers.pop();
       if (!closed) {
         continue;
@@ -134,17 +258,22 @@ function extractDocumentSymbols(document: vscode.TextDocument): vscode.DocumentS
   };
 
   for (let lineNumber = 0; lineNumber < document.lineCount; lineNumber += 1) {
-    closeContainers(lineNumber);
-
     const line = document.lineAt(lineNumber);
     const text = line.text;
-    const trimmed = text.trim();
+    const structure = lexLineForStructure(text, lexState);
+    const trimmed = structure.sanitizedText.trim();
+    if (trimmed.length > 0) {
+      closeContainers(lineNumber, line.firstNonWhitespaceCharacterIndex);
+    } else {
+      closeContainers(lineNumber);
+    }
 
-    if (trimmed.length === 0 || trimmed.startsWith('//')) {
+    if (trimmed.length === 0) {
+      braceDepth = Math.max(0, braceDepth + structure.openBraces - structure.closeBraces);
       continue;
     }
 
-    const match = declarationPattern.exec(text);
+    const match = declarationPattern.exec(structure.sanitizedText);
     if (match) {
       const keyword = match[1] ? 'package' : match[3] ? 'import' : match[5] ?? '';
       const symbolName = (match[2] ?? match[4] ?? match[6] ?? '').trim();
@@ -173,20 +302,22 @@ function extractDocumentSymbols(document: vscode.TextDocument): vscode.DocumentS
         );
         appendSymbol(symbol);
 
-        const openCount = countOccurrences(text, '{');
-        const closeCount = countOccurrences(text, '}');
-        const opensScope = isContainerKeyword(keyword) && openCount > closeCount;
-        if (opensScope) {
-          const closeDepth = braceDepth + Math.max(1, openCount - closeCount);
-
-          containers.push({ symbol, closeDepth });
+        const opensBraceScope = isContainerKeyword(keyword) && structure.openBraces > structure.closeBraces;
+        if (opensBraceScope) {
+          containers.push({
+            symbol,
+            closeDepth: braceDepth + Math.max(1, structure.openBraces - structure.closeBraces)
+          });
+        } else if (opensIndentationScope(keyword, structure.sanitizedText)) {
+          containers.push({
+            symbol,
+            closeIndent: line.firstNonWhitespaceCharacterIndex
+          });
         }
       }
     }
 
-    const opens = countOccurrences(text, '{');
-    const closes = countOccurrences(text, '}');
-    braceDepth = Math.max(0, braceDepth + opens - closes);
+    braceDepth = Math.max(0, braceDepth + structure.openBraces - structure.closeBraces);
     closeContainers(lineNumber + 1);
   }
 

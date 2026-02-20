@@ -61,19 +61,18 @@ export class SyntaxDiagnosticsController implements vscode.Disposable {
         return;
       }
 
-      const config = await readDiagnosticsConfigFromWorkspaceConfig();
-      if (!config.enabled || config.trigger !== 'onType') {
-        return;
-      }
-
       const key = document.uri.toString();
       const existingTimer = this.pendingRefreshTimers.get(key);
       if (existingTimer) {
         clearTimeout(existingTimer);
       }
 
-      const timer = setTimeout(() => {
+      const timer = setTimeout(async () => {
         this.pendingRefreshTimers.delete(key);
+        const config = await readDiagnosticsConfigFromWorkspaceConfig();
+        if (!config.enabled || config.trigger !== 'onType') {
+          return;
+        }
         void this.refreshDocument(document);
       }, SyntaxDiagnosticsController.ON_TYPE_DEBOUNCE_MS);
 

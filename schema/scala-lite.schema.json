@@ -4,43 +4,40 @@
   "type": "object",
   "properties": {
     "mode": {
-      "type": "object",
-      "properties": {
-        "default": {
+      "description": "Default Scala Lite mode.",
+      "default": "A",
+      "oneOf": [
+        {
           "type": "string",
           "enum": ["A", "B", "C"]
+        },
+        {
+          "type": "object",
+          "description": "Legacy object form.",
+          "properties": {
+            "default": {
+              "type": "string",
+              "enum": ["A", "B", "C"],
+              "default": "A"
+            }
+          },
+          "additionalProperties": false
         }
-      },
-      "additionalProperties": true
+      ]
+    },
+    "moduleFolder": {
+      "type": "string",
+      "description": "Relative module folder path used for Mode C indexing.",
+      "default": ""
     },
     "indexedModuleFolder": {
-      "type": "string"
-    },
-    "logLevel": {
       "type": "string",
-      "enum": ["DEBUG", "INFO", "WARN", "ERROR"]
-    },
-    "formatter": {
-      "type": "object",
-      "properties": {
-        "path": { "type": "string" },
-        "useDocker": { "type": "boolean", "default": false },
-        "timeoutMs": { "type": "integer", "minimum": 100, "default": 5000 },
-        "formatOnSave": { "type": "boolean", "default": false }
-      },
-      "additionalProperties": false
-    },
-    "linter": {
-      "type": "object",
-      "properties": {
-        "path": { "type": "string" },
-        "useDocker": { "type": "boolean", "default": false },
-        "timeoutMs": { "type": "integer", "minimum": 100, "default": 10000 }
-      },
-      "additionalProperties": false
+      "description": "Legacy alias for moduleFolder.",
+      "default": ""
     },
     "profiles": {
       "type": "array",
+      "description": "Task profile definitions for run/test command templates.",
       "items": {
         "type": "object",
         "required": [
@@ -54,26 +51,170 @@
           "preBuildCommand"
         ],
         "properties": {
-          "name": { "type": "string", "minLength": 1 },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
           "buildTool": {
             "type": "string",
             "enum": ["sbt", "mill", "scala-cli", "maven", "gradle", "none"]
           },
-          "workingDirectory": { "type": "string" },
-          "runCommand": { "type": "string" },
-          "testCommand": { "type": "string" },
+          "workingDirectory": {
+            "type": "string"
+          },
+          "runCommand": {
+            "type": "string"
+          },
+          "testCommand": {
+            "type": "string"
+          },
           "envVars": {
             "type": "object",
-            "additionalProperties": { "type": "string" }
+            "additionalProperties": {
+              "type": "string"
+            }
           },
           "jvmOpts": {
             "type": "array",
-            "items": { "type": "string" }
+            "items": {
+              "type": "string"
+            }
           },
-          "preBuildCommand": { "type": "string" }
+          "preBuildCommand": {
+            "type": "string"
+          }
         },
         "additionalProperties": false
-      }
+      },
+      "default": []
+    },
+    "activeProfile": {
+      "type": "string",
+      "description": "Profile name to use by default for run/test commands.",
+      "default": ""
+    },
+    "ignorePatterns": {
+      "type": "array",
+      "description": "Additional glob ignore patterns. Prefix with ! to remove default/removable ignores.",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "unsafeMode": {
+      "type": "boolean",
+      "description": "Allows removal of hard safety ignore patterns.",
+      "default": false
+    },
+    "budgets": {
+      "type": "object",
+      "description": "Execution budgets for search/index operations.",
+      "properties": {
+        "searchTimeMs": {
+          "type": "integer",
+          "minimum": 50,
+          "default": 2000
+        },
+        "indexTimeMs": {
+          "type": "integer",
+          "minimum": 50,
+          "default": 5000
+        },
+        "maxSearchResults": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 500
+        },
+        "formatterTimeMs": {
+          "type": "integer",
+          "minimum": 50,
+          "default": 5000
+        }
+      },
+      "additionalProperties": false
+    },
+    "diagnostics": {
+      "type": "object",
+      "description": "Diagnostics collection behavior.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "trigger": {
+          "type": "string",
+          "enum": ["onSave", "onType"],
+          "default": "onSave"
+        }
+      },
+      "additionalProperties": false
+    },
+    "formatter": {
+      "type": "object",
+      "description": "Scalafmt execution settings.",
+      "properties": {
+        "scalafmtPath": {
+          "type": "string",
+          "default": ""
+        },
+        "path": {
+          "type": "string",
+          "description": "Legacy alias for scalafmtPath.",
+          "default": ""
+        },
+        "useDocker": {
+          "type": "boolean",
+          "default": false
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 100,
+          "default": 5000
+        },
+        "formatOnSave": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "linter": {
+      "type": "object",
+      "description": "Scalafix execution settings.",
+      "properties": {
+        "scalafixPath": {
+          "type": "string",
+          "default": ""
+        },
+        "path": {
+          "type": "string",
+          "description": "Legacy alias for scalafixPath.",
+          "default": ""
+        },
+        "useDocker": {
+          "type": "boolean",
+          "default": false
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 100,
+          "default": 10000
+        }
+      },
+      "additionalProperties": false
+    },
+    "logLevel": {
+      "type": "string",
+      "enum": ["DEBUG", "INFO", "WARN", "ERROR"],
+      "default": "INFO"
+    },
+    "testFrameworkHints": {
+      "type": "array",
+      "description": "Optional test framework hints used by test discovery.",
+      "items": {
+        "type": "string"
+      },
+      "default": []
     }
   },
   "additionalProperties": true

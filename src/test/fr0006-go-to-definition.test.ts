@@ -16,8 +16,14 @@ test('FR-0006: mode manager supports injected definition provider', () => {
 
 test('FR-0006: go-to-definition includes tier badges and fallback search UX', () => {
   const source = readSource('src/goToDefinitionFeature.ts');
-  assert.equal(source.includes('📍 Likely match'), true);
-  assert.equal(source.includes('🔍 Text search'), true);
+  assert.equal(source.includes('Exact'), true);
+  assert.equal(source.includes('📍 Likely'), true);
+  assert.equal(source.includes('🔍 Text Search'), true);
+  assert.equal(source.includes('await this.symbolIndexManager.searchSymbols(symbolName, 200, token)'), true);
+  assert.equal(source.includes('private async prioritizeTextSearchFiles('), true);
+  assert.equal(source.includes('await this.symbolIndexManager.searchSymbols(symbolName, 400, token)'), true);
+  assert.equal(source.includes('for (const fileUri of prioritizedFileUris)'), true);
+  assert.equal(source.includes('private async findIndexedDefinition('), true);
   assert.equal(source.includes('Open Find in Files'), true);
   assert.equal(source.includes('Select definition for {0}'), true);
 });

@@ -110,7 +110,7 @@ export function detectTestCases(text: string, framework: TestFramework): TestCas
   return cases;
 }
 
-function suiteFqn(text: string, suiteName: string): string {
+export function inferSuiteFqn(text: string, suiteName: string): string {
   const packageName = inferPackageName(text);
   return packageName ? `${packageName}.${suiteName}` : suiteName;
 }
@@ -122,7 +122,7 @@ export function createSuiteTestCommand(
   fileText: string,
   millModule: string
 ): string {
-  const target = suiteFqn(fileText, suiteName);
+  const target = inferSuiteFqn(fileText, suiteName);
 
   if (buildTool === 'scala-cli') {
     return `scala-cli test "${filePath}"`;
@@ -148,7 +148,7 @@ export function createIndividualTestCommand(
   fileText: string,
   millModule: string
 ): string | undefined {
-  const target = suiteFqn(fileText, suiteName);
+  const target = inferSuiteFqn(fileText, suiteName);
 
   if (framework === 'scalatest') {
     if (buildTool === 'scala-cli') {

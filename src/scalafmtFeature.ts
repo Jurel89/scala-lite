@@ -81,9 +81,17 @@ async function runResolvedScalafmt(
   args: string[],
   input: string,
   cwd: string,
-  timeoutMs: number
+  timeoutMs: number,
+  token?: vscode.CancellationToken
 ): Promise<{ status: 'ok' | 'timeout' | 'error'; stdout?: string; error?: string }> {
   let child: ReturnType<typeof spawn> | undefined;
+
+  const cancellation = token?.onCancellationRequested(() => {
+    try {
+      child?.kill();
+    } catch {
+    }
+  });
 
   const result = await runScalafmtWithTimeout(async () => {
     return new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
@@ -120,13 +128,23 @@ async function runResolvedScalafmt(
     }
   }
 
+  cancellation?.dispose();
+
+  if (token?.isCancellationRequested) {
+    return { status: 'error', error: vscode.l10n.t('Scala Lite operation cancelled.') };
+  }
+
   return result;
 }
 
 export function registerScalafmtFeature(logger: StructuredLogger): vscode.Disposable[] {
   const formattingProvider: vscode.DocumentFormattingEditProvider = {
-    async provideDocumentFormattingEdits(document, _options, _token) {
+    async provideDocumentFormattingEdits(document, _options, token) {
       if (!document.fileName.endsWith('.scala') && !document.fileName.endsWith('.sbt')) {
+        return [];
+      }
+
+      if (token.isCancellationRequested) {
         return [];
       }
 
@@ -166,8 +184,14 @@ export function registerScalafmtFeature(logger: StructuredLogger): vscode.Dispos
         resolution.args,
         document.getText(),
         folder.uri.fsPath,
-        timeoutMs
+        timeoutMs,
+        token
       );
+
+      if (token.isCancellationRequested) {
+        logger.info('FORMAT', 'Scalafmt operation cancelled by user.', Date.now() - startedAt);
+        return [];
+      }
 
       if (result.status === 'timeout') {
         const seconds = Math.round(timeoutMs / 1000);

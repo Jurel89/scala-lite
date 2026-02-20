@@ -96,6 +96,26 @@
         "command": "scalaLite.runScalafix",
         "title": "%command.scalaLite.runScalafix.title%",
         "category": "%commandCategory.scalaLite%"
+      },
+      {
+        "command": "scalaLite.runWorkspaceDoctor",
+        "title": "%command.scalaLite.runWorkspaceDoctor.title%",
+        "category": "%commandCategory.scalaLite%"
+      },
+      {
+        "command": "scalaLite.restartNativeEngine",
+        "title": "%command.scalaLite.restartNativeEngine.title%",
+        "category": "%commandCategory.scalaLite%"
+      },
+      {
+        "command": "scalaLite.runActivationAudit",
+        "title": "%command.scalaLite.runActivationAudit.title%",
+        "category": "%commandCategory.scalaLite%"
+      },
+      {
+        "command": "scalaLite.runMemoryBudgetAudit",
+        "title": "%command.scalaLite.runMemoryBudgetAudit.title%",
+        "category": "%commandCategory.scalaLite%"
       }
     ],
     "configuration": {
@@ -121,6 +141,8 @@
     "clean": "rm -rf dist",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
+    "native:build": "cargo build --manifest-path native/scala-lite-engine/Cargo.toml --release",
+    "native:test": "cargo test --manifest-path native/scala-lite-engine/Cargo.toml",
     "pretest": "npm run compile",
     "test": "node --test dist/test/**/*.test.js"
   },

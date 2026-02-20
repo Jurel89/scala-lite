@@ -51,7 +51,7 @@ test('FR-0005: mode C indexes scala and sbt files with 5000-file cap', () => {
 
 test('FR-0005: extension wires SymbolIndexManager into mode changes', () => {
   const source = readSource('src/extension.ts');
-  assert.equal(source.includes('new SymbolIndexManager(logger)'), true);
+  assert.equal(source.includes('new SymbolIndexManager(logger, () => getNativeEngine())'), true);
   assert.equal(source.includes('symbolIndexManager.initialize(context)'), true);
   assert.equal(source.includes('await symbolIndexManager.setMode(mode)'), true);
 });

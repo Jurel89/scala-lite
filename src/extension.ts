@@ -22,6 +22,12 @@ import { createDiagnosticBundle } from './diagnosticBundle';
 import { ProfileManager } from './profileManager';
 import { registerScalafmtFeature } from './scalafmtFeature';
 import { registerScalafixFeature } from './scalafixFeature';
+import { validateIgnoreRulesAtActivation } from './ignoreRules';
+import { registerWorkspaceConfigFeature } from './workspaceConfigFeature';
+import { SymbolIndexManager } from './symbolIndex';
+import { GoToDefinitionProvider } from './goToDefinitionFeature';
+import { WorkspaceSymbolSearchProvider } from './workspaceSymbolFeature';
+import { FindUsagesProvider } from './findUsagesFeature';
 
 const IDLE_AUDIT_DURATION_MS = 30_000;
 
@@ -68,9 +74,12 @@ async function onModeChanged(
   mode: WorkspaceMode,
   detectionSession: BuildToolDetectionSession,
   buildToolState: Map<string, BuildTool>,
-  logger: StructuredLogger
+  logger: StructuredLogger,
+  symbolIndexManager: SymbolIndexManager
 ): Promise<void> {
   logger.info('ACTIVATE', `Switching mode to ${mode}.`);
+  await symbolIndexManager.setMode(mode);
+
   if (mode === 'A') {
     return;
   }
@@ -86,12 +95,19 @@ export function activate(context: vscode.ExtensionContext): void {
       logger.info('CONFIG', `Log level set to ${level} from workspace config.`);
     }
   });
+  void validateIgnoreRulesAtActivation(logger);
   logger.info('ACTIVATE', 'Extension activation started.');
 
   const buildToolDetectionSession = new BuildToolDetectionSession();
   const buildToolState = new Map<string, BuildTool>();
+  let buildIntegrationEnabled = true;
+  let activeMode: WorkspaceMode = 'A';
 
   const getBuildToolForUri = (uri: vscode.Uri): BuildTool => {
+    if (!buildIntegrationEnabled) {
+      return 'none';
+    }
+
     const folder = vscode.workspace.getWorkspaceFolder(uri);
     if (!folder) {
       return 'none';
@@ -101,6 +117,10 @@ export function activate(context: vscode.ExtensionContext): void {
   };
 
   const getPrimaryDetectedBuildTool = (): BuildTool => {
+    if (!buildIntegrationEnabled) {
+      return 'none';
+    }
+
     const first = vscode.workspace.workspaceFolders?.[0];
     if (!first) {
       return 'none';
@@ -110,6 +130,20 @@ export function activate(context: vscode.ExtensionContext): void {
   };
 
   const profileManager = new ProfileManager(context, getPrimaryDetectedBuildTool);
+  const symbolIndexManager = new SymbolIndexManager(logger);
+  symbolIndexManager.initialize(context);
+  const definitionProvider = new GoToDefinitionProvider(symbolIndexManager, () => activeMode, logger);
+  const workspaceSymbolProvider = new WorkspaceSymbolSearchProvider(symbolIndexManager, () => activeMode);
+  const referenceProvider = new FindUsagesProvider(() => activeMode);
+
+  const editorAccessDisposable = vscode.window.onDidChangeActiveTextEditor((editor) => {
+    if (editor) {
+      workspaceSymbolProvider.recordFileAccess(editor.document.uri);
+    }
+  });
+  const openDocumentAccessDisposable = vscode.workspace.onDidOpenTextDocument((document) => {
+    workspaceSymbolProvider.recordFileAccess(document.uri);
+  });
 
   const runMainProvider = new RunMainCodeLensProvider({
     getBuildToolForUri,
@@ -121,7 +155,21 @@ export function activate(context: vscode.ExtensionContext): void {
   });
   const buildDiagnosticsRunner = new BuildDiagnosticsRunner(logger);
   const modeManager = new ModeManager(context, {
-    onModeChanged: async (mode) => onModeChanged(mode, buildToolDetectionSession, buildToolState, logger),
+    onModeChanged: async (mode) => {
+      activeMode = mode;
+      await onModeChanged(mode, buildToolDetectionSession, buildToolState, logger, symbolIndexManager);
+    },
+    getBuildIntegrationLabel: () => getPrimaryDetectedBuildTool(),
+    onBuildIntegrationChanged: async (enabled) => {
+      buildIntegrationEnabled = enabled;
+
+      if (!enabled) {
+        buildToolState.clear();
+        return;
+      }
+
+      await detectWorkspaceBuildTools(buildToolDetectionSession, buildToolState, logger, false);
+    },
     registerAdditionalProvidersForMode: (mode) => {
       if (mode === 'A') {
         return [];
@@ -137,7 +185,10 @@ export function activate(context: vscode.ExtensionContext): void {
           runTestProvider
         )
       ];
-    }
+    },
+    definitionProvider,
+    workspaceSymbolProvider,
+    referenceProvider
   });
 
   const runIdleAuditDisposable = vscode.commands.registerCommand('scalaLite.runIdleCpuAudit', async () => {
@@ -186,17 +237,27 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   const scalafmtDisposables = registerScalafmtFeature(logger);
   const scalafixDisposables = registerScalafixFeature(logger);
+  const workspaceConfigDisposables = registerWorkspaceConfigFeature({
+    logger,
+    modeManager,
+    profileManager,
+    getDefaultBuildTool: getPrimaryDetectedBuildTool
+  });
 
   context.subscriptions.push(
     runIdleAuditDisposable,
     reDetectBuildToolDisposable,
     copyDiagnosticBundleDisposable,
+    editorAccessDisposable,
+    openDocumentAccessDisposable,
     logger,
     buildDiagnosticsRunner,
     profileManager,
+    symbolIndexManager,
     modeManager,
     ...scalafmtDisposables,
     ...scalafixDisposables,
+    ...workspaceConfigDisposables,
     ...runMainCommandDisposables,
     ...runTestCommandDisposables
   );

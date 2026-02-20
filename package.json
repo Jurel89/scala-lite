@@ -53,6 +53,16 @@
         "category": "%commandCategory.scalaLite%"
       },
       {
+        "command": "scalaLite.debugMainEntry",
+        "title": "%command.scalaLite.debugMainEntry.title%",
+        "category": "%commandCategory.scalaLite%"
+      },
+      {
+        "command": "scalaLite.generateDebugConfiguration",
+        "title": "%command.scalaLite.generateDebugConfiguration.title%",
+        "category": "%commandCategory.scalaLite%"
+      },
+      {
         "command": "scalaLite.runTestSuite",
         "title": "%command.scalaLite.runTestSuite.title%",
         "category": "%commandCategory.scalaLite%"
@@ -128,6 +138,41 @@
         }
       }
     },
+    "languages": [
+      {
+        "id": "scala",
+        "aliases": [
+          "Scala"
+        ],
+        "extensions": [
+          ".scala",
+          ".sc"
+        ],
+        "configuration": "./syntaxes/scala-language-configuration.json"
+      },
+      {
+        "id": "scala-sbt",
+        "aliases": [
+          "Scala SBT"
+        ],
+        "extensions": [
+          ".sbt"
+        ],
+        "configuration": "./syntaxes/scala-language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "scala",
+        "scopeName": "source.scala",
+        "path": "./syntaxes/scala.tmLanguage.json"
+      },
+      {
+        "language": "scala-sbt",
+        "scopeName": "source.scala.sbt",
+        "path": "./syntaxes/sbt.tmLanguage.json"
+      }
+    ],
     "jsonValidation": [
       {
         "fileMatch": [

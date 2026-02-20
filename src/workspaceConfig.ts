@@ -43,6 +43,11 @@ export interface DiagnosticsConfig {
   readonly trigger?: 'onSave' | 'onType';
 }
 
+export interface EffectiveDiagnosticsConfig {
+  readonly enabled: boolean;
+  readonly trigger: 'onSave' | 'onType';
+}
+
 export interface FormatterConfig {
   readonly path?: string;
   readonly scalafmtPath?: string;
@@ -289,6 +294,24 @@ export async function readFormatterConfigFromWorkspaceConfig(): Promise<Formatte
   return {
     ...formatter,
     path: formatter.path ?? formatter.scalafmtPath
+  };
+}
+
+export async function readDiagnosticsConfigFromWorkspaceConfig(): Promise<EffectiveDiagnosticsConfig> {
+  const folder = getPrimaryWorkspaceFolder();
+  if (!folder) {
+    return {
+      enabled: true,
+      trigger: 'onSave'
+    };
+  }
+
+  const config = await readConfig(folder);
+  const diagnostics = config.diagnostics ?? {};
+
+  return {
+    enabled: diagnostics.enabled ?? true,
+    trigger: diagnostics.trigger ?? 'onSave'
   };
 }
 

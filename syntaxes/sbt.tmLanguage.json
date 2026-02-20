@@ -1,0 +1,14 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Scala SBT",
+  "scopeName": "source.scala.sbt",
+  "patterns": [
+    {
+      "name": "keyword.other.sbt",
+      "match": "\\b(?:libraryDependencies|scalaVersion|crossScalaVersions|addCompilerPlugin|scalacOptions|name|version|organization|resolvers|Compile|Test)\\b"
+    },
+    {
+      "include": "source.scala"
+    }
+  ]
+}

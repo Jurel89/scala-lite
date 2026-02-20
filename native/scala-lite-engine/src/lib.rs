@@ -182,8 +182,8 @@ fn fuzzy_score(query: &str, candidate: &str) -> Option<i32> {
 
     for (index, query_char) in query.chars().enumerate() {
         let mut found = None;
-        for position in cursor..chars.len() {
-            if chars[position] == query_char {
+        for (position, candidate_char) in chars.iter().enumerate().skip(cursor) {
+            if *candidate_char == query_char {
                 found = Some(position);
                 break;
             }

@@ -1,0 +1,33 @@
+# =============================================================================
+# Internal & Copilot Assets
+# These files should not be committed to this repository.
+# Copilot customizations are managed in the central copilot-resources repo.
+# =============================================================================
+
+# Internal documentation (not for public repos)
+docs/internal/
+**/docs/internal/
+
+# GitHub Copilot customization files
+# These should only exist in the central copilot-resources repository
+.github/agents/
+.github/instructions/
+.github/skills/
+.github/prompts/
+.github/copilot-instructions.md
+
+# Claude AI configuration (centralized elsewhere)
+.claude/
+CLAUDE.md
+
+# Ensure workflows are NOT ignored
+!.github/workflows/
+
+# Node / VS Code extension build artifacts
+node_modules/
+dist/
+.vscode-test/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*

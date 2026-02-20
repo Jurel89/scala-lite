@@ -1,0 +1,125 @@
+{
+  "name": "scala-lite",
+  "displayName": "Scala Lite",
+  "description": "Performance-first Scala workflow extension for VS Code.",
+  "version": "0.0.1",
+  "publisher": "jurel89",
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "scalaLite.runIdleCpuAudit",
+        "title": "%command.scalaLite.runIdleCpuAudit.title%",
+        "category": "%commandCategory.scalaLite%"
+      },
+      {
+        "command": "scalaLite.reDetectBuildTool",
+        "title": "%command.scalaLite.reDetectBuildTool.title%",
+        "category": "%commandCategory.scalaLite%"
+      },
+      {
+        "command": "scalaLite.switchModeA",
+        "title": "%command.scalaLite.switchModeA.title%",
+        "category": "%commandCategory.scalaLite%"
+      },
+      {
+        "command": "scalaLite.switchModeB",
+        "title": "%command.scalaLite.switchModeB.title%",
+        "category": "%commandCategory.scalaLite%"
+      },
+      {
+        "command": "scalaLite.switchModeC",
+        "title": "%command.scalaLite.switchModeC.title%",
+        "category": "%commandCategory.scalaLite%"
+      },
+      {
+        "command": "scalaLite.runMainEntry",
+        "title": "%command.scalaLite.runMainEntry.title%",
+        "category": "%commandCategory.scalaLite%"
+      },
+      {
+        "command": "scalaLite.copyRunCommand",
+        "title": "%command.scalaLite.copyRunCommand.title%",
+        "category": "%commandCategory.scalaLite%"
+      },
+      {
+        "command": "scalaLite.runTestSuite",
+        "title": "%command.scalaLite.runTestSuite.title%",
+        "category": "%commandCategory.scalaLite%"
+      },
+      {
+        "command": "scalaLite.runTestCase",
+        "title": "%command.scalaLite.runTestCase.title%",
+        "category": "%commandCategory.scalaLite%"
+      },
+      {
+        "command": "scalaLite.copyTestCommand",
+        "title": "%command.scalaLite.copyTestCommand.title%",
+        "category": "%commandCategory.scalaLite%"
+      },
+      {
+        "command": "scalaLite.copyDiagnosticBundle",
+        "title": "%command.scalaLite.copyDiagnosticBundle.title%",
+        "category": "%commandCategory.scalaLite%"
+      },
+      {
+        "command": "scalaLite.switchProfile",
+        "title": "%command.scalaLite.switchProfile.title%",
+        "category": "%commandCategory.scalaLite%"
+      },
+      {
+        "command": "scalaLite.editProfiles",
+        "title": "%command.scalaLite.editProfiles.title%",
+        "category": "%commandCategory.scalaLite%"
+      },
+      {
+        "command": "scalaLite.runScalafix",
+        "title": "%command.scalaLite.runScalafix.title%",
+        "category": "%commandCategory.scalaLite%"
+      }
+    ],
+    "configuration": {
+      "title": "Scala Lite",
+      "properties": {
+        "scalaLite.activeProfile": {
+          "type": "string",
+          "default": "",
+          "description": "%configuration.scalaLite.activeProfile.description%"
+        }
+      }
+    },
+    "jsonValidation": [
+      {
+        "fileMatch": [
+          "/.vscode/scala-lite.json"
+        ],
+        "url": "./schema/scala-lite.schema.json"
+      }
+    ]
+  },
+  "scripts": {
+    "clean": "rm -rf dist",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile",
+    "test": "node --test dist/test/**/*.test.js"
+  },
+  "dependencies": {
+    "jszip": "^3.10.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.12.0",
+    "@types/vscode": "^1.95.0",
+    "typescript": "^5.8.2"
+  }
+}

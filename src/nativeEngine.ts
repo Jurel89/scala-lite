@@ -31,8 +31,8 @@ export class NativeEngineUnavailableError extends Error {
 }
 
 export class NativeEngineCrashError extends Error {
-  public constructor(message: string) {
-    super(message);
+  public constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
     this.name = 'NativeEngineCrashError';
   }
 }
@@ -448,7 +448,7 @@ export class NativeEngine {
       return value;
     } catch (error) {
       if (cancelled) {
-        throw new Error('Operation cancelled.');
+        throw new Error('Operation cancelled.', { cause: error });
       }
 
       if (error instanceof Error && error.message.toLowerCase().includes('cancel')) {
@@ -456,7 +456,7 @@ export class NativeEngine {
       }
 
       this.status = 'crashed';
-      throw new NativeEngineCrashError(error instanceof Error ? error.message : String(error));
+      throw new NativeEngineCrashError(error instanceof Error ? error.message : String(error), { cause: error });
     } finally {
       cancellationDisposable?.dispose();
     }

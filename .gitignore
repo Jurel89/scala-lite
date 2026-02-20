@@ -31,3 +31,7 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+
+# Rust native engine build artifacts
+native/scala-lite-engine/target/
+native/scala-lite-engine/Cargo.lock

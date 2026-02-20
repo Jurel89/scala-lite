@@ -54,6 +54,301 @@ function selectorForScala(): vscode.DocumentSelector {
   return [{ language: 'scala' }, { pattern: '**/*.sbt' }];
 }
 
+interface OutlineContainer {
+  readonly symbol: vscode.DocumentSymbol;
+  readonly closeDepth?: number;
+  readonly closeIndent?: number;
+}
+
+interface OutlineLexState {
+  inBlockComment: boolean;
+  inTripleString: boolean;
+}
+
+interface LineStructure {
+  readonly sanitizedText: string;
+  readonly openBraces: number;
+  readonly closeBraces: number;
+}
+
+function countOccurrences(value: string, token: string): number {
+  return value.split(token).length - 1;
+}
+
+function lexLineForStructure(text: string, state: OutlineLexState): LineStructure {
+  const sanitized: string[] = [];
+  let index = 0;
+
+  while (index < text.length) {
+    if (state.inBlockComment) {
+      if (text.startsWith('*/', index)) {
+        state.inBlockComment = false;
+        sanitized.push('  ');
+        index += 2;
+        continue;
+      }
+
+      sanitized.push(' ');
+      index += 1;
+      continue;
+    }
+
+    if (state.inTripleString) {
+      if (text.startsWith('"""', index)) {
+        state.inTripleString = false;
+        sanitized.push('   ');
+        index += 3;
+        continue;
+      }
+
+      sanitized.push(' ');
+      index += 1;
+      continue;
+    }
+
+    if (text.startsWith('//', index)) {
+      break;
+    }
+
+    if (text.startsWith('/*', index)) {
+      state.inBlockComment = true;
+      sanitized.push('  ');
+      index += 2;
+      continue;
+    }
+
+    if (text.startsWith('"""', index)) {
+      state.inTripleString = true;
+      sanitized.push('   ');
+      index += 3;
+      continue;
+    }
+
+    const char = text[index];
+    if (char === '"') {
+      sanitized.push(' ');
+      index += 1;
+      while (index < text.length) {
+        const current = text[index];
+        sanitized.push(' ');
+        index += 1;
+        if (current === '"' && text[index - 2] !== '\\') {
+          break;
+        }
+      }
+      continue;
+    }
+
+    if (char === '\'') {
+      sanitized.push(' ');
+      index += 1;
+      while (index < text.length) {
+        const current = text[index];
+        sanitized.push(' ');
+        index += 1;
+        if (current === '\'' && text[index - 2] !== '\\') {
+          break;
+        }
+      }
+      continue;
+    }
+
+    sanitized.push(char);
+    index += 1;
+  }
+
+  const sanitizedText = sanitized.join('');
+  return {
+    sanitizedText,
+    openBraces: countOccurrences(sanitizedText, '{'),
+    closeBraces: countOccurrences(sanitizedText, '}')
+  };
+}
+
+function opensIndentationScope(keyword: string, sanitizedLine: string): boolean {
+  if (!isContainerKeyword(keyword)) {
+    return false;
+  }
+
+  return /:\s*$/.test(sanitizedLine.trim());
+}
+
+function keywordToSymbolKind(keyword: string): vscode.SymbolKind {
+  switch (keyword) {
+    case 'package':
+      return vscode.SymbolKind.Namespace;
+    case 'object':
+      return vscode.SymbolKind.Object;
+    case 'class':
+    case 'case class':
+      return vscode.SymbolKind.Class;
+    case 'trait':
+    case 'sealed trait':
+      return vscode.SymbolKind.Interface;
+    case 'enum':
+      return vscode.SymbolKind.Enum;
+    case 'def':
+      return vscode.SymbolKind.Method;
+    case 'val':
+    case 'var':
+      return vscode.SymbolKind.Variable;
+    case 'type':
+      return vscode.SymbolKind.TypeParameter;
+    case 'given':
+      return vscode.SymbolKind.Property;
+    default:
+      return vscode.SymbolKind.String;
+  }
+}
+
+function isContainerKeyword(keyword: string): boolean {
+  return keyword === 'package'
+    || keyword === 'object'
+    || keyword === 'class'
+    || keyword === 'case class'
+    || keyword === 'trait'
+    || keyword === 'sealed trait'
+    || keyword === 'enum';
+}
+
+function extractDocumentSymbols(document: vscode.TextDocument): vscode.DocumentSymbol[] {
+  const symbols: vscode.DocumentSymbol[] = [];
+  const imports: vscode.DocumentSymbol[] = [];
+  const importLines: number[] = [];
+  const containers: OutlineContainer[] = [];
+  const lexState: OutlineLexState = {
+    inBlockComment: false,
+    inTripleString: false
+  };
+  let braceDepth = 0;
+
+  const declarationPattern = /^\s*(?:(?:export\s+)?(?:(package)\s+([\w.]+)|(import)\s+(.+)|((?:case\s+class|sealed\s+trait|class|object|trait|enum|def|val|var|type|given))\s+([\w$]+)))/;
+
+  const appendSymbol = (symbol: vscode.DocumentSymbol): void => {
+    const parent = containers.at(-1)?.symbol;
+    if (parent) {
+      parent.children.push(symbol);
+      return;
+    }
+
+    symbols.push(symbol);
+  };
+
+  const closeContainers = (lineNumber: number, currentIndent?: number): void => {
+    while (containers.length > 0) {
+      const top = containers[containers.length - 1];
+      const shouldCloseByDepth = typeof top.closeDepth === 'number' && braceDepth < top.closeDepth;
+      const shouldCloseByIndent = typeof top.closeIndent === 'number'
+        && typeof currentIndent === 'number'
+        && currentIndent <= top.closeIndent;
+
+      if (!shouldCloseByDepth && !shouldCloseByIndent) {
+        break;
+      }
+
+      const closed = containers.pop();
+      if (!closed) {
+        continue;
+      }
+
+      const endLine = Math.max(0, lineNumber - 1);
+      const endColumn = document.lineAt(endLine).text.length;
+      closed.symbol.range = new vscode.Range(closed.symbol.range.start, new vscode.Position(endLine, endColumn));
+    }
+  };
+
+  for (let lineNumber = 0; lineNumber < document.lineCount; lineNumber += 1) {
+    const line = document.lineAt(lineNumber);
+    const text = line.text;
+    const structure = lexLineForStructure(text, lexState);
+    const trimmed = structure.sanitizedText.trim();
+    if (trimmed.length > 0) {
+      closeContainers(lineNumber, line.firstNonWhitespaceCharacterIndex);
+    } else {
+      closeContainers(lineNumber);
+    }
+
+    if (trimmed.length === 0) {
+      braceDepth = Math.max(0, braceDepth + structure.openBraces - structure.closeBraces);
+      continue;
+    }
+
+    const match = declarationPattern.exec(structure.sanitizedText);
+    if (match) {
+      const keyword = match[1] ? 'package' : match[3] ? 'import' : match[5] ?? '';
+      const symbolName = (match[2] ?? match[4] ?? match[6] ?? '').trim();
+      const startColumn = text.indexOf(symbolName);
+      const selectionStart = new vscode.Position(lineNumber, Math.max(0, startColumn));
+      const lineEnd = new vscode.Position(lineNumber, text.length);
+
+      if (keyword === 'import') {
+        importLines.push(lineNumber);
+        imports.push(
+          new vscode.DocumentSymbol(
+            symbolName,
+            '',
+            vscode.SymbolKind.Module,
+            new vscode.Range(selectionStart, lineEnd),
+            new vscode.Range(selectionStart, lineEnd)
+          )
+        );
+      } else {
+        const symbol = new vscode.DocumentSymbol(
+          symbolName,
+          '',
+          keywordToSymbolKind(keyword),
+          new vscode.Range(selectionStart, lineEnd),
+          new vscode.Range(selectionStart, lineEnd)
+        );
+        appendSymbol(symbol);
+
+        const opensBraceScope = isContainerKeyword(keyword) && structure.openBraces > structure.closeBraces;
+        if (opensBraceScope) {
+          containers.push({
+            symbol,
+            closeDepth: braceDepth + Math.max(1, structure.openBraces - structure.closeBraces)
+          });
+        } else if (opensIndentationScope(keyword, structure.sanitizedText)) {
+          containers.push({
+            symbol,
+            closeIndent: line.firstNonWhitespaceCharacterIndex
+          });
+        }
+      }
+    }
+
+    braceDepth = Math.max(0, braceDepth + structure.openBraces - structure.closeBraces);
+    closeContainers(lineNumber + 1);
+  }
+
+  while (containers.length > 0) {
+    const closed = containers.pop();
+    if (!closed) {
+      continue;
+    }
+
+    const endLine = Math.max(0, document.lineCount - 1);
+    const endColumn = document.lineAt(endLine).text.length;
+    closed.symbol.range = new vscode.Range(closed.symbol.range.start, new vscode.Position(endLine, endColumn));
+  }
+
+  if (imports.length > 0) {
+    const firstImport = importLines[0];
+    const lastImport = importLines[importLines.length - 1];
+    const importGroup = new vscode.DocumentSymbol(
+      'imports',
+      '',
+      vscode.SymbolKind.Namespace,
+      new vscode.Range(firstImport, 0, lastImport, document.lineAt(lastImport).text.length),
+      new vscode.Range(firstImport, 0, firstImport, document.lineAt(firstImport).text.length)
+    );
+    importGroup.children.push(...imports);
+    symbols.unshift(importGroup);
+  }
+
+  return symbols;
+}
+
 export interface ModeManagerOptions {
   readonly onModeChanged?: (mode: WorkspaceMode) => void | Promise<void>;
   readonly registerAdditionalProvidersForMode?: (mode: WorkspaceMode) => vscode.Disposable[];
@@ -313,18 +608,19 @@ export class ModeManager implements vscode.Disposable {
     const disposables: vscode.Disposable[] = [];
     const selector = selectorForScala();
 
+    const documentSymbolProvider = vscode.languages.registerDocumentSymbolProvider(selector, {
+      provideDocumentSymbols(document): vscode.DocumentSymbol[] {
+        return extractDocumentSymbols(document);
+      }
+    });
+    disposables.push(documentSymbolProvider);
+
     if (this.options.referenceProvider) {
       const referenceProvider = vscode.languages.registerReferenceProvider(selector, this.options.referenceProvider);
       disposables.push(referenceProvider);
     }
 
     if (mode === 'B' || mode === 'C') {
-      const documentSymbolProvider = vscode.languages.registerDocumentSymbolProvider(selector, {
-        provideDocumentSymbols(): vscode.DocumentSymbol[] {
-          return [];
-        }
-      });
-
       const codeLensProvider = vscode.languages.registerCodeLensProvider(selector, {
         provideCodeLenses(): vscode.CodeLens[] {
           return [];
@@ -345,7 +641,7 @@ export class ModeManager implements vscode.Disposable {
         ? vscode.languages.registerWorkspaceSymbolProvider(this.options.workspaceSymbolProvider)
         : undefined;
 
-      disposables.push(documentSymbolProvider, codeLensProvider, definitionProvider);
+      disposables.push(codeLensProvider, definitionProvider);
       if (workspaceSymbolProvider) {
         disposables.push(workspaceSymbolProvider);
       }

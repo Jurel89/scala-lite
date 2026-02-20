@@ -7,6 +7,8 @@
   "command.scalaLite.switchModeC.title": "Switch to Mode C",
   "command.scalaLite.runMainEntry.title": "Run Main Entry",
   "command.scalaLite.copyRunCommand.title": "Copy Run Command",
+  "command.scalaLite.debugMainEntry.title": "Debug Main Entry",
+  "command.scalaLite.generateDebugConfiguration.title": "Generate Debug Configuration",
   "command.scalaLite.runTestSuite.title": "Run Test Suite",
   "command.scalaLite.runTestCase.title": "Run Test Case",
   "command.scalaLite.copyTestCommand.title": "Copy Test Command",

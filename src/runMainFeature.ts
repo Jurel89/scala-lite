@@ -15,8 +15,13 @@ import { getBuildAdapterRegistry } from './buildAdapters';
 
 export const COMMAND_RUN_MAIN_ENTRY = 'scalaLite.runMainEntry';
 export const COMMAND_COPY_RUN_COMMAND = 'scalaLite.copyRunCommand';
+export const COMMAND_DEBUG_MAIN_ENTRY = 'scalaLite.debugMainEntry';
+export const COMMAND_GENERATE_DEBUG_CONFIGURATION = 'scalaLite.generateDebugConfiguration';
 
 const RUN_TERMINAL_NAME = 'Scala Lite: Run';
+const DEFAULT_DEBUG_PORT = 5005;
+const JAVA_DEBUG_EXTENSION_ID = 'vscjava.vscode-java-debug';
+const EXTENSION_INSTALL_WAIT_MS = 15000;
 
 interface RunMainArgs {
   readonly documentUri: string;
@@ -73,6 +78,205 @@ function terminalForRun(): vscode.Terminal {
   return terminal;
 }
 
+function isFileNotFoundError(error: unknown): boolean {
+  if (!(error instanceof vscode.FileSystemError)) {
+    return false;
+  }
+
+  const code = (error as { code?: string }).code;
+  if (code === 'FileNotFound' || code === 'EntryNotFound') {
+    return true;
+  }
+
+  const name = error.name.toLowerCase();
+  const message = error.message.toLowerCase();
+  return name.includes('filenotfound')
+    || name.includes('entrynotfound')
+    || message.includes('filenotfound')
+    || message.includes('entrynotfound');
+}
+
+async function waitForExtensionAvailable(extensionId: string, timeoutMs: number): Promise<boolean> {
+  if (vscode.extensions.getExtension(extensionId)) {
+    return true;
+  }
+
+  return new Promise<boolean>((resolve) => {
+    const timeout = setTimeout(() => {
+      disposable.dispose();
+      resolve(false);
+    }, timeoutMs);
+
+    const disposable = vscode.extensions.onDidChange(() => {
+      if (!vscode.extensions.getExtension(extensionId)) {
+        return;
+      }
+
+      clearTimeout(timeout);
+      disposable.dispose();
+      resolve(true);
+    });
+  });
+}
+
+async function ensureJavaDebugAdapterInstalled(): Promise<boolean> {
+  if (vscode.extensions.getExtension(JAVA_DEBUG_EXTENSION_ID)) {
+    return true;
+  }
+
+  const install = vscode.l10n.t('Install');
+  const cancel = vscode.l10n.t('Cancel');
+  const choice = await vscode.window.showWarningMessage(
+    vscode.l10n.t('Java Debug Adapter extension required.'),
+    install,
+    cancel
+  );
+
+  if (choice !== install) {
+    return false;
+  }
+
+  await vscode.commands.executeCommand('workbench.extensions.installExtension', JAVA_DEBUG_EXTENSION_ID);
+  if (await waitForExtensionAvailable(JAVA_DEBUG_EXTENSION_ID, EXTENSION_INSTALL_WAIT_MS)) {
+    return true;
+  }
+
+  const reload = vscode.l10n.t('Reload Window');
+  const later = vscode.l10n.t('Later');
+  const nextStep = await vscode.window.showInformationMessage(
+    vscode.l10n.t('Java Debug Adapter installed. Reload window to finish enabling debugging.'),
+    reload,
+    later
+  );
+
+  if (nextStep === reload) {
+    await vscode.commands.executeCommand('workbench.action.reloadWindow');
+  }
+
+  return Boolean(vscode.extensions.getExtension(JAVA_DEBUG_EXTENSION_ID));
+}
+
+function attachDebugConfiguration(name: string, port = DEFAULT_DEBUG_PORT): vscode.DebugConfiguration {
+  return {
+    type: 'java',
+    name,
+    request: 'attach',
+    hostName: 'localhost',
+    port
+  };
+}
+
+function toDebugCommand(
+  buildTool: BuildTool,
+  document: vscode.TextDocument,
+  entry: EntryPoint,
+  profile?: TaskProfile,
+  debugPort = DEFAULT_DEBUG_PORT
+): string | undefined {
+  const packageName = inferPackageName(document.getText());
+  const mainClass = inferFqnForEntry(packageName, entry);
+  if (!mainClass) {
+    return undefined;
+  }
+
+  if (profile) {
+    const adapter = getBuildAdapterRegistry().resolveFor(buildTool, profile);
+    const command = adapter.runMainCommand(mainClass, document.uri.fsPath, profile);
+
+    if (buildTool === 'sbt') {
+      return applyProfileCommandShape(`sbt -jvm-debug ${debugPort} "runMain ${mainClass}"`, profile);
+    }
+    if (buildTool === 'scala-cli') {
+      return applyProfileCommandShape(
+        `scala-cli run "${document.uri.fsPath}" --java-opt "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=${debugPort}"`,
+        profile
+      );
+    }
+
+    return applyProfileCommandShape(command, profile);
+  }
+
+  if (buildTool === 'sbt') {
+    return `sbt -jvm-debug ${debugPort} "runMain ${mainClass}"`;
+  }
+
+  if (buildTool === 'scala-cli') {
+    return `scala-cli run "${document.uri.fsPath}" --java-opt "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=${debugPort}"`;
+  }
+
+  if (buildTool === 'mill') {
+    const module = inferMillModule(document);
+    return `mill -Djava.vmargs=-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=${debugPort} ${module}.runMain ${mainClass}`;
+  }
+
+  return undefined;
+}
+
+async function upsertLaunchJsonTemplates(): Promise<void> {
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+  if (!workspaceFolder) {
+    return;
+  }
+
+  const vscodeFolderUri = vscode.Uri.joinPath(workspaceFolder.uri, '.vscode');
+  const launchJsonUri = vscode.Uri.joinPath(vscodeFolderUri, 'launch.json');
+  await vscode.workspace.fs.createDirectory(vscodeFolderUri);
+
+  let launchConfig: { version: string; configurations: vscode.DebugConfiguration[] } = {
+    version: '0.2.0',
+    configurations: []
+  };
+
+  try {
+    const current = await vscode.workspace.fs.readFile(launchJsonUri);
+    const content = Buffer.from(current).toString('utf8');
+
+    try {
+      launchConfig = JSON.parse(content) as { version: string; configurations: vscode.DebugConfiguration[] };
+    } catch {
+      await vscode.window.showErrorMessage(vscode.l10n.t('Existing .vscode/launch.json contains invalid JSON. Please fix it before adding Scala Lite debug templates.'));
+      return;
+    }
+  } catch (error) {
+    if (!isFileNotFoundError(error)) {
+      const message = error instanceof Error ? error.message : String(error);
+      await vscode.window.showErrorMessage(vscode.l10n.t('Unable to read existing .vscode/launch.json: {0}', message));
+      return;
+    }
+  }
+
+  const templates: vscode.DebugConfiguration[] = [
+    {
+      ...attachDebugConfiguration('Scala Lite: sbt Run (Attach)')
+    },
+    {
+      ...attachDebugConfiguration('Scala Lite: sbt Test (Attach)')
+    },
+    {
+      ...attachDebugConfiguration('Scala Lite: scala-cli Run (Attach)')
+    }
+  ];
+
+  const existingConfigurations = Array.isArray(launchConfig.configurations)
+    ? launchConfig.configurations
+    : [];
+  const existingNames = new Set(existingConfigurations.map((configuration) => configuration.name));
+  const nextConfigurations = [...existingConfigurations];
+  for (const template of templates) {
+    if (!existingNames.has(template.name)) {
+      nextConfigurations.push(template);
+    }
+  }
+
+  const normalized = {
+    version: launchConfig.version ?? '0.2.0',
+    configurations: nextConfigurations
+  };
+
+  await vscode.workspace.fs.writeFile(launchJsonUri, Buffer.from(`${JSON.stringify(normalized, null, 2)}\n`, 'utf8'));
+  await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(launchJsonUri));
+}
+
 export class RunMainCodeLensProvider implements vscode.CodeLensProvider {
   private readonly getBuildToolForUri: (uri: vscode.Uri) => BuildTool;
   private readonly getActiveProfile?: () => TaskProfile;
@@ -105,13 +309,23 @@ export class RunMainCodeLensProvider implements vscode.CodeLensProvider {
       });
 
       const command = createRunCommand(buildTool, document, entry, profile);
+      const debugCodeLens = new vscode.CodeLens(range, {
+        title: '🛠 Debug',
+        command: COMMAND_DEBUG_MAIN_ENTRY,
+        arguments: [
+          {
+            documentUri: document.uri.toString(),
+            entryLine: entry.line
+          } as RunMainArgs
+        ]
+      });
       const copyCodeLens = new vscode.CodeLens(range, {
         title: 'Copy Command',
         command: COMMAND_COPY_RUN_COMMAND,
         arguments: [command ?? '']
       });
 
-      return [runCodeLens, copyCodeLens];
+      return [runCodeLens, debugCodeLens, copyCodeLens];
     });
   }
 }
@@ -187,5 +401,37 @@ export function registerRunMainCommandsWithExecutor(
     vscode.window.showInformationMessage(vscode.l10n.t('Run command copied to clipboard.'));
   });
 
-  return [runCommand, copyCommand];
+  const debugCommand = vscode.commands.registerCommand(COMMAND_DEBUG_MAIN_ENTRY, async (args: RunMainArgs) => {
+    if (!(await ensureJavaDebugAdapterInstalled())) {
+      return;
+    }
+
+    const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(args.documentUri));
+    const entries = detectRunEntryPoints(document.getText());
+    const entry = entries.find((item) => item.line === args.entryLine);
+    if (!entry) {
+      return;
+    }
+
+    const profile = options.getActiveProfile?.();
+    const buildTool = profile?.buildTool ?? options.getBuildToolForUri(document.uri);
+    const command = toDebugCommand(buildTool, document, entry, profile);
+    if (!command) {
+      return;
+    }
+
+    await executeCommand(command, document.uri);
+    await vscode.debug.startDebugging(vscode.workspace.getWorkspaceFolder(document.uri), attachDebugConfiguration('Scala Lite: Attach Main'));
+  });
+
+  const generateDebugConfigurationCommand = vscode.commands.registerCommand(COMMAND_GENERATE_DEBUG_CONFIGURATION, async () => {
+    if (!(await ensureJavaDebugAdapterInstalled())) {
+      return;
+    }
+
+    await upsertLaunchJsonTemplates();
+    vscode.window.showInformationMessage(vscode.l10n.t('Debug configuration generated in .vscode/launch.json.'));
+  });
+
+  return [runCommand, copyCommand, debugCommand, generateDebugConfigurationCommand];
 }

@@ -1,0 +1,116 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Scala",
+  "scopeName": "source.scala",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#numbers" },
+    { "include": "#annotations" },
+    { "include": "#operators" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.scala",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.block.scala",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.triple.scala",
+          "begin": "\"\"\"",
+          "end": "\"\"\""
+        },
+        {
+          "name": "string.interpolated.scala",
+          "begin": "\\b(?:s|f|raw)\"",
+          "end": "(?<!\\\\)\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.scala",
+              "match": "\\\\."
+            },
+            {
+              "name": "variable.interpolation.scala",
+              "match": "\\$\\{[^}]+\\}|\\$[A-Za-z_][A-Za-z0-9_]*"
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.double.scala",
+          "begin": "\"",
+          "end": "(?<!\\\\)\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.scala",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.single.scala",
+          "match": "'([^'\\\\]|\\\\.)'"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.scala",
+          "match": "\\b(?:if|else|for|while|do|try|catch|finally|throw|return|match|case|yield)\\b"
+        },
+        {
+          "name": "keyword.declaration.scala",
+          "match": "\\b(?:package|import|object|class|case\\s+class|trait|sealed|enum|def|val|var|type|given|using|extension|export|implicit|lazy)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "constant.language.scala",
+          "match": "\\b(?:true|false|null)\\b"
+        },
+        {
+          "name": "storage.type.scala",
+          "match": "\\b(?:Unit|Any|AnyVal|AnyRef|Nothing|String|Int|Long|Double|Float|Boolean|Char|Short|Byte)\\b"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.scala",
+          "match": "\\b(?:0[xX][0-9a-fA-F]+|\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)\\b"
+        }
+      ]
+    },
+    "annotations": {
+      "patterns": [
+        {
+          "name": "storage.modifier.annotation.scala",
+          "match": "@[A-Za-z_][A-Za-z0-9_]*"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.scala",
+          "match": "=>|<-|=|::|:|\\+|-|\\*|/|%|&&|\\|\\||==|!=|<=|>=|<|>"
+        }
+      ]
+    }
+  }
+}

@@ -3,6 +3,7 @@ import { WorkspaceMode } from './modePresentation';
 import { SymbolIndexManager } from './symbolIndex';
 import { NativeDiagnostic } from './nativeEngine';
 import { StructuredLogger } from './structuredLogger';
+import { readDiagnosticsConfigFromWorkspaceConfig } from './workspaceConfig';
 
 function isSyntaxDiagnosticsFile(document: vscode.TextDocument): boolean {
   return document.fileName.endsWith('.scala') || document.fileName.endsWith('.sbt');
@@ -24,11 +25,14 @@ function toVscodeDiagnostics(entries: readonly NativeDiagnostic[]): vscode.Diagn
 }
 
 export class SyntaxDiagnosticsController implements vscode.Disposable {
+  private static readonly ON_TYPE_DEBOUNCE_MS = 500;
+
   private readonly symbolIndexManager: SymbolIndexManager;
   private readonly getMode: () => WorkspaceMode;
   private readonly logger: StructuredLogger;
   private readonly diagnostics: vscode.DiagnosticCollection;
   private readonly disposables: vscode.Disposable[];
+  private readonly pendingRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   public constructor(
     symbolIndexManager: SymbolIndexManager,
@@ -45,18 +49,46 @@ export class SyntaxDiagnosticsController implements vscode.Disposable {
     });
 
     const saveDisposable = vscode.workspace.onDidSaveTextDocument(async (document) => {
-      await this.refreshDocument(document);
+      const config = await readDiagnosticsConfigFromWorkspaceConfig();
+      if (config.enabled && config.trigger === 'onSave') {
+        await this.refreshDocument(document);
+      }
+    });
+
+    const changeDisposable = vscode.workspace.onDidChangeTextDocument(async (event) => {
+      const document = event.document;
+      if (!isSyntaxDiagnosticsFile(document)) {
+        return;
+      }
+
+      const key = document.uri.toString();
+      const existingTimer = this.pendingRefreshTimers.get(key);
+      if (existingTimer) {
+        clearTimeout(existingTimer);
+      }
+
+      const timer = setTimeout(async () => {
+        this.pendingRefreshTimers.delete(key);
+        const config = await readDiagnosticsConfigFromWorkspaceConfig();
+        if (!config.enabled || config.trigger !== 'onType') {
+          return;
+        }
+        void this.refreshDocument(document);
+      }, SyntaxDiagnosticsController.ON_TYPE_DEBOUNCE_MS);
+
+      this.pendingRefreshTimers.set(key, timer);
     });
 
     const closeDisposable = vscode.workspace.onDidCloseTextDocument((document) => {
       this.diagnostics.delete(document.uri);
     });
 
-    this.disposables = [openDisposable, saveDisposable, closeDisposable, this.diagnostics];
+    this.disposables = [openDisposable, saveDisposable, changeDisposable, closeDisposable, this.diagnostics];
   }
 
   public async refreshOpenDocuments(token?: vscode.CancellationToken): Promise<void> {
-    if (this.getMode() === 'A') {
+    const config = await readDiagnosticsConfigFromWorkspaceConfig();
+    if (!config.enabled) {
       this.diagnostics.clear();
       return;
     }
@@ -72,6 +104,11 @@ export class SyntaxDiagnosticsController implements vscode.Disposable {
   }
 
   public dispose(): void {
+    for (const timer of this.pendingRefreshTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.pendingRefreshTimers.clear();
+
     for (const disposable of this.disposables) {
       disposable.dispose();
     }
@@ -82,7 +119,8 @@ export class SyntaxDiagnosticsController implements vscode.Disposable {
       return;
     }
 
-    if (this.getMode() === 'A') {
+    const config = await readDiagnosticsConfigFromWorkspaceConfig();
+    if (!config.enabled) {
       this.diagnostics.delete(document.uri);
       return;
     }

@@ -141,6 +141,8 @@
     "clean": "rm -rf dist",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src --ext .ts",
     "native:build": "cargo build --manifest-path native/scala-lite-engine/Cargo.toml --release",
     "native:test": "cargo test --manifest-path native/scala-lite-engine/Cargo.toml",
     "pretest": "npm run compile",
@@ -153,6 +155,10 @@
   "devDependencies": {
     "@types/node": "^22.12.0",
     "@types/vscode": "^1.95.0",
+    "@typescript-eslint/eslint-plugin": "^8.19.0",
+    "@typescript-eslint/parser": "^8.19.0",
+    "eslint": "^9.17.0",
+    "globals": "^15.15.0",
     "typescript": "^5.8.2"
   }
 }

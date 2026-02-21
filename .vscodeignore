@@ -11,12 +11,16 @@ docs/**
 !README.md
 !CHANGELOG.md
 !LICENSE
+!assets/**
 
 # Native engine source (keep only built binaries if they exist)
+!native/scala-lite-engine/bindings/*.node
 native/scala-lite-engine/src/**
+native/scala-lite-engine/tests/**
 native/scala-lite-engine/target/**
 native/scala-lite-engine/Cargo.toml
 native/scala-lite-engine/Cargo.lock
+native/scala-lite-engine/**/*.rs
 
 # CI/CD and development files
 .github/**

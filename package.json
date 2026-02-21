@@ -1,9 +1,27 @@
 {
   "name": "scala-lite",
   "displayName": "Scala Lite",
-  "description": "Performance-first Scala workflow extension for VS Code.",
+  "description": "Lightweight Scala extension for VS Code with fast navigation, run/test workflows, formatting, and workspace diagnostics.",
   "version": "0.0.1",
   "publisher": "jurel89",
+  "preview": true,
+  "icon": "assets/icon.png",
+  "galleryBanner": {
+    "color": "#1E1E1E",
+    "theme": "dark"
+  },
+  "badges": [
+    {
+      "url": "https://github.com/Jurel89/scala-lite/actions/workflows/ci.yml/badge.svg",
+      "href": "https://github.com/Jurel89/scala-lite/actions/workflows/ci.yml",
+      "description": "CI Status"
+    },
+    {
+      "url": "https://img.shields.io/badge/license-MIT-green.svg",
+      "href": "https://github.com/Jurel89/scala-lite/blob/main/LICENSE",
+      "description": "MIT License"
+    }
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -13,7 +31,16 @@
     "vscode": "^1.95.0"
   },
   "categories": [
-    "Programming Languages"
+    "Programming Languages",
+    "Formatters",
+    "Linters"
+  ],
+  "keywords": [
+    "scala",
+    "sbt",
+    "mill",
+    "scala-cli",
+    "formatter"
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
@@ -246,18 +273,34 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext .ts",
     "native:build": "cargo build --manifest-path native/scala-lite-engine/Cargo.toml --release",
+    "native:build:napi": "napi build --platform --release --manifest-path native/scala-lite-engine/Cargo.toml --features napi",
     "native:test": "cargo test --manifest-path native/scala-lite-engine/Cargo.toml",
     "pretest": "npm run compile",
-    "test": "node --test dist/test/*.test.js"
+    "test": "node --test dist/test/*.test.js",
+    "test:smoke": "node dist/test/smoke.vscode-test.js"
   },
   "dependencies": {
     "jszip": "^3.10.1",
     "minimatch": "^10.2.2"
   },
+  "napi": {
+    "name": "scala-lite-engine",
+    "triples": {
+      "defaults": false,
+      "additional": [
+        "x86_64-unknown-linux-gnu",
+        "x86_64-apple-darwin",
+        "aarch64-apple-darwin",
+        "x86_64-pc-windows-msvc"
+      ]
+    }
+  },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@napi-rs/cli": "^2.18.4",
     "@types/node": "^25.3.0",
     "@types/vscode": "^1.95.0",
+    "@vscode/test-electron": "^2.5.2",
     "@typescript-eslint/eslint-plugin": "^8.19.0",
     "@typescript-eslint/parser": "^8.19.0",
     "eslint": "^10.0.1",

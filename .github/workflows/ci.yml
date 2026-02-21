@@ -28,3 +28,6 @@ jobs:
       - run: npm test
       
       - run: npx @vscode/vsce package --no-dependencies
+
+      - name: Smoke test (headless activation)
+        run: xvfb-run -a npm run test:smoke

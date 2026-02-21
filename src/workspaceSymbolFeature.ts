@@ -2,6 +2,8 @@ import * as vscode from 'vscode';
 import * as path from 'node:path';
 import { WorkspaceMode } from './modePresentation';
 import { IndexedSymbol, SymbolIndexManager } from './symbolIndex';
+import { readModuleFolderFromWorkspaceConfig } from './workspaceConfig';
+import { formatResultBadge, ResultSource } from './resultBadges';
 
 interface RankedSymbol {
   readonly symbol: IndexedSymbol;
@@ -108,6 +110,19 @@ export class WorkspaceSymbolSearchProvider implements vscode.WorkspaceSymbolProv
       ? this.symbolIndexManager.getAllSymbols()
       : await this.symbolIndexManager.searchSymbols(normalizedQuery, 300, token);
     const ranked: RankedSymbol[] = [];
+    let indexedModuleRoot: string | undefined;
+
+    if (mode === 'C') {
+      const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+      const configuredModulePath = await readModuleFolderFromWorkspaceConfig();
+      if (workspaceFolder) {
+        indexedModuleRoot = path.resolve(
+          configuredModulePath
+            ? path.join(workspaceFolder.uri.fsPath, configuredModulePath)
+            : workspaceFolder.uri.fsPath
+        );
+      }
+    }
 
     for (const symbol of allSymbols) {
       if (token.isCancellationRequested) {
@@ -147,7 +162,9 @@ export class WorkspaceSymbolSearchProvider implements vscode.WorkspaceSymbolProv
     return ranked.slice(0, 200).map((entry) => {
       const symbol = entry.symbol;
       const modulePrefix = mode === 'C' ? this.resolveModulePrefix(symbol.filePath) : undefined;
-      const symbolLabel = modulePrefix ? `${modulePrefix}: ${symbol.symbolName}` : symbol.symbolName;
+      const source = this.resolveSymbolSource(mode, symbol.filePath, indexedModuleRoot);
+      const badge = formatResultBadge(source);
+      const symbolLabel = modulePrefix ? `${badge} ${modulePrefix}: ${symbol.symbolName}` : `${badge} ${symbol.symbolName}`;
       return new vscode.SymbolInformation(
         symbolLabel,
         toSymbolKind(symbol.symbolKind),
@@ -155,6 +172,23 @@ export class WorkspaceSymbolSearchProvider implements vscode.WorkspaceSymbolProv
         new vscode.Location(vscode.Uri.file(symbol.filePath), new vscode.Position(Math.max(0, symbol.lineNumber - 1), 0))
       );
     });
+  }
+
+  private resolveSymbolSource(mode: WorkspaceMode, filePath: string, indexedModuleRoot: string | undefined): ResultSource {
+    if (mode === 'A') {
+      return 'text';
+    }
+
+    if (mode !== 'C' || !indexedModuleRoot) {
+      return 'indexed';
+    }
+
+    const resolvedPath = path.resolve(filePath);
+    if (resolvedPath === indexedModuleRoot || resolvedPath.startsWith(`${indexedModuleRoot}${path.sep}`)) {
+      return 'indexed';
+    }
+
+    return 'text';
   }
 
   private resolveModulePrefix(filePath: string): string {

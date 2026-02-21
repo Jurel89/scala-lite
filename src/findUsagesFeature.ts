@@ -8,6 +8,7 @@ import {
   readBudgetConfigFromWorkspaceConfig,
   readModuleFolderFromWorkspaceConfig
 } from './workspaceConfig';
+import { formatResultBadge, ResultSource } from './resultBadges';
 
 type SearchScope = 'current-file' | 'current-folder' | 'current-module' | 'entire-workspace';
 
@@ -50,6 +51,22 @@ function scopeLabel(scope: SearchScope): string {
   }
 
   return 'Entire Workspace';
+}
+
+function resolveResultSource(mode: WorkspaceMode, scope: SearchScope): ResultSource {
+  if (mode === 'A') {
+    return 'text';
+  }
+
+  if (mode === 'C') {
+    return scope === 'current-module' ? 'indexed' : 'text';
+  }
+
+  if (scope === 'current-file' || scope === 'current-folder') {
+    return 'indexed';
+  }
+
+  return 'text';
 }
 
 async function pickScope(defaultScope: SearchScope, mode: WorkspaceMode): Promise<SearchScope | undefined> {
@@ -196,8 +213,9 @@ export class FindUsagesProvider implements vscode.ReferenceProvider {
     }
 
     // Primary message with symbol and scope context (FR-0022)
+    const sourceBadge = formatResultBadge(resolveResultSource(mode, selectedScope));
     vscode.window.setStatusBarMessage(
-      vscode.l10n.t('Textual references for {0} (scope: {1})', symbol, scopeLabel(selectedScope)),
+      `${sourceBadge} ${vscode.l10n.t('Textual references for {0} (scope: {1})', symbol, scopeLabel(selectedScope))}`,
       3500
     );
 

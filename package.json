@@ -273,7 +273,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext .ts",
     "native:build": "cargo build --manifest-path native/scala-lite-engine/Cargo.toml --release",
-    "native:build:napi": "cd native/scala-lite-engine && napi build --platform --release --features napi",
+    "native:build:napi": "(cd native/scala-lite-engine && napi build --platform --release --features napi)",
     "native:test": "cargo test --manifest-path native/scala-lite-engine/Cargo.toml",
     "pretest": "npm run compile",
     "test": "node --test dist/test/*.test.js",

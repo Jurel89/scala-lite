@@ -1,0 +1,48 @@
+# Build outputs and source files
+src/**
+*.ts
+*.map
+tsconfig.json
+eslint.config.mjs
+
+# Documentation (keep README at root)
+docs/**
+*.md
+!README.md
+!CHANGELOG.md
+!LICENSE
+
+# Native engine source (keep only built binaries if they exist)
+native/scala-lite-engine/src/**
+native/scala-lite-engine/target/**
+native/scala-lite-engine/Cargo.toml
+native/scala-lite-engine/Cargo.lock
+
+# CI/CD and development files
+.github/**
+.vscode/**
+.vscode-test/**
+.gitignore
+.gitattributes
+
+# Test files
+**/*.test.ts
+**/*.test.js
+
+# Dependencies (already bundled)
+node_modules/**
+
+# Package management
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Editor files
+.DS_Store
+*.swp
+*.swo
+
+# Misc
+.editorconfig
+.prettierrc
+.eslintrc*

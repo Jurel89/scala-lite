@@ -5,6 +5,10 @@
   "version": "0.0.1",
   "publisher": "jurel89",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Jurel89/scala-lite.git"
+  },
   "engines": {
     "vscode": "^1.95.0"
   },

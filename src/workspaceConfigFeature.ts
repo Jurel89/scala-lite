@@ -7,6 +7,7 @@ import {
   getUnknownTopLevelWorkspaceConfigKeys,
   isWorkspaceConfigDocument,
   openOrCreateWorkspaceConfig,
+  refreshWorkspaceConfigSourceState,
   readLogLevelFromWorkspaceConfig,
   readWorkspaceConfigRaw
 } from './workspaceConfig';
@@ -24,6 +25,7 @@ interface WorkspaceConfigFeatureOptions {
 }
 
 async function reloadWorkspaceConfiguration(options: WorkspaceConfigFeatureOptions): Promise<void> {
+  await refreshWorkspaceConfigSourceState();
   const config = await readWorkspaceConfigRaw();
   const unknownKeys = getUnknownTopLevelWorkspaceConfigKeys(config);
   if (unknownKeys.length > 0) {
@@ -38,10 +40,18 @@ async function reloadWorkspaceConfiguration(options: WorkspaceConfigFeatureOptio
   await validateIgnoreRulesAtActivation(options.logger);
   await options.modeManager.reloadFromWorkspaceConfig();
   await options.profileManager.reloadFromWorkspaceConfig();
+  options.modeManager.refreshStatusBar();
 }
 
 export function registerWorkspaceConfigFeature(options: WorkspaceConfigFeatureOptions): vscode.Disposable[] {
   const openConfigDisposable = vscode.commands.registerCommand(COMMAND_OPEN_CONFIGURATION, async () => {
+    const sourceState = await refreshWorkspaceConfigSourceState();
+    if (sourceState.source === 'merged' && sourceState.hasOverlappingOverrides) {
+      void vscode.window.showInformationMessage(
+        vscode.l10n.t('Note: .vscode/scala-lite.json takes precedence over VS Code Settings for overlapping properties.')
+      );
+    }
+
     const document = await openOrCreateWorkspaceConfig(options.getDefaultBuildTool());
     if (!document) {
       return;
@@ -114,7 +124,30 @@ export function registerWorkspaceConfigFeature(options: WorkspaceConfigFeatureOp
     }
   });
 
+  const configFileWatcher = vscode.workspace.createFileSystemWatcher('**/.vscode/scala-lite.json');
+  const onConfigFileChanged = async (): Promise<void> => {
+    try {
+      await reloadWorkspaceConfiguration(options);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      options.logger.warn('CONFIG', `Failed to refresh config source state: ${message}`);
+    }
+  };
+
+  const fileCreatedDisposable = configFileWatcher.onDidCreate(onConfigFileChanged);
+  const fileChangedDisposable = configFileWatcher.onDidChange(onConfigFileChanged);
+  const fileDeletedDisposable = configFileWatcher.onDidDelete(onConfigFileChanged);
+
   void reloadWorkspaceConfiguration(options);
 
-  return [openConfigDisposable, createConfigDisposable, saveWatcherDisposable, settingsWatcherDisposable];
+  return [
+    openConfigDisposable,
+    createConfigDisposable,
+    saveWatcherDisposable,
+    settingsWatcherDisposable,
+    configFileWatcher,
+    fileCreatedDisposable,
+    fileChangedDisposable,
+    fileDeletedDisposable
+  ];
 }

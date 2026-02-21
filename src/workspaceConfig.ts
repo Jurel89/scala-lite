@@ -96,7 +96,179 @@ interface EffectiveSettingsConfig {
   readonly formatterFormatOnSave?: boolean;
 }
 
+type SupportedSettingKey =
+  | 'mode'
+  | 'logLevel'
+  | 'diagnostics.enabled'
+  | 'diagnostics.trigger'
+  | 'formatter.formatOnSave'
+  | 'activeProfile';
+
+interface SettingsCustomizationState {
+  readonly hasCustomizedSettings: boolean;
+  readonly customizedKeys: ReadonlySet<SupportedSettingKey>;
+}
+
+export type WorkspaceConfigSource = 'defaults' | 'settings-ui' | 'json-file' | 'merged';
+
+export interface WorkspaceConfigSourceState {
+  readonly source: WorkspaceConfigSource;
+  readonly hasSettingsUiValues: boolean;
+  readonly hasJsonFile: boolean;
+  readonly hasOverlappingOverrides: boolean;
+}
+
+let currentWorkspaceConfigSourceState: WorkspaceConfigSourceState = {
+  source: 'defaults',
+  hasSettingsUiValues: false,
+  hasJsonFile: false,
+  hasOverlappingOverrides: false
+};
+
 const invalidJsonWarnings = new Set<string>();
+
+function getSettingsCustomizationState(): SettingsCustomizationState {
+  const settings = vscode.workspace.getConfiguration('scalaLite');
+  const keys: SupportedSettingKey[] = [
+    'mode',
+    'logLevel',
+    'diagnostics.enabled',
+    'diagnostics.trigger',
+    'formatter.formatOnSave',
+    'activeProfile'
+  ];
+
+  const customizedKeys = new Set<SupportedSettingKey>();
+  for (const key of keys) {
+    const inspected = settings.inspect(key);
+    if (
+      inspected?.workspaceFolderValue !== undefined
+      || inspected?.workspaceValue !== undefined
+      || inspected?.globalValue !== undefined
+    ) {
+      customizedKeys.add(key);
+    }
+  }
+
+  return {
+    hasCustomizedSettings: customizedKeys.size > 0,
+    customizedKeys
+  };
+}
+
+async function readConfigWithMetadata(folder: vscode.WorkspaceFolder): Promise<{
+  readonly config: ScalaLiteWorkspaceConfig;
+  readonly exists: boolean;
+}> {
+  const configUri = getWorkspaceConfigUri(folder);
+
+  try {
+    await vscode.workspace.fs.stat(configUri);
+  } catch {
+    invalidJsonWarnings.delete(configUri.toString());
+    return {
+      config: {},
+      exists: false
+    };
+  }
+
+  try {
+    const raw = await vscode.workspace.fs.readFile(configUri);
+    const parsed = JSON.parse(Buffer.from(raw).toString('utf8')) as ScalaLiteWorkspaceConfig;
+    invalidJsonWarnings.delete(configUri.toString());
+    return {
+      config: parsed,
+      exists: true
+    };
+  } catch (error) {
+    const key = configUri.toString();
+    if (!invalidJsonWarnings.has(key)) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes('JSON')) {
+        invalidJsonWarnings.add(key);
+        void vscode.window.showWarningMessage(vscode.l10n.t('Configuration file is invalid JSON. Defaults are being used until fixed.'));
+      }
+    }
+
+    return {
+      config: {},
+      exists: true
+    };
+  }
+}
+
+function hasOverlappingSettingsOverrides(
+  config: ScalaLiteWorkspaceConfig,
+  customizedKeys: ReadonlySet<SupportedSettingKey>
+): boolean {
+  const diagnostics = config.diagnostics ?? {};
+  const formatter = config.formatter ?? {};
+
+  return (
+    (customizedKeys.has('mode') && (config.mode === 'A' || config.mode === 'B' || config.mode === 'C'))
+    || (customizedKeys.has('logLevel') && typeof config.logLevel === 'string')
+    || (customizedKeys.has('diagnostics.enabled') && typeof diagnostics.enabled === 'boolean')
+    || (customizedKeys.has('diagnostics.trigger') && (diagnostics.trigger === 'onSave' || diagnostics.trigger === 'onType'))
+    || (customizedKeys.has('formatter.formatOnSave') && typeof formatter.formatOnSave === 'boolean')
+    || (customizedKeys.has('activeProfile') && typeof config.activeProfile === 'string')
+  );
+}
+
+export function getWorkspaceConfigSourceState(): WorkspaceConfigSourceState {
+  return currentWorkspaceConfigSourceState;
+}
+
+export function getWorkspaceConfigSourceLabel(): string {
+  const source = currentWorkspaceConfigSourceState.source;
+
+  if (source === 'settings-ui') {
+    return vscode.l10n.t('settings UI');
+  }
+
+  if (source === 'json-file') {
+    return vscode.l10n.t('scala-lite.json');
+  }
+
+  if (source === 'merged') {
+    return vscode.l10n.t('scala-lite.json + settings UI (file wins)');
+  }
+
+  return vscode.l10n.t('defaults');
+}
+
+export async function refreshWorkspaceConfigSourceState(): Promise<WorkspaceConfigSourceState> {
+  const settingsState = getSettingsCustomizationState();
+  const folder = getPrimaryWorkspaceFolder();
+
+  if (!folder) {
+    currentWorkspaceConfigSourceState = {
+      source: settingsState.hasCustomizedSettings ? 'settings-ui' : 'defaults',
+      hasSettingsUiValues: settingsState.hasCustomizedSettings,
+      hasJsonFile: false,
+      hasOverlappingOverrides: false
+    };
+    return currentWorkspaceConfigSourceState;
+  }
+
+  const { config, exists } = await readConfigWithMetadata(folder);
+
+  const source: WorkspaceConfigSource = exists
+    ? (settingsState.hasCustomizedSettings ? 'merged' : 'json-file')
+    : (settingsState.hasCustomizedSettings ? 'settings-ui' : 'defaults');
+
+  const hasOverlappingOverrides = exists
+    && settingsState.hasCustomizedSettings
+    && hasOverlappingSettingsOverrides(config, settingsState.customizedKeys);
+
+  currentWorkspaceConfigSourceState = {
+    source,
+    hasSettingsUiValues: settingsState.hasCustomizedSettings,
+    hasJsonFile: exists,
+    hasOverlappingOverrides
+  };
+
+  return currentWorkspaceConfigSourceState;
+}
 
 function getPrimaryWorkspaceFolder(): vscode.WorkspaceFolder | undefined {
   return vscode.workspace.workspaceFolders?.[0];
@@ -126,25 +298,8 @@ function readSettingsConfig(): EffectiveSettingsConfig {
 }
 
 async function readConfig(folder: vscode.WorkspaceFolder): Promise<ScalaLiteWorkspaceConfig> {
-  const configUri = getWorkspaceConfigUri(folder);
-
-  try {
-    const raw = await vscode.workspace.fs.readFile(configUri);
-    const parsed = JSON.parse(Buffer.from(raw).toString('utf8')) as ScalaLiteWorkspaceConfig;
-    invalidJsonWarnings.delete(configUri.toString());
-    return parsed;
-  } catch (error) {
-    const key = configUri.toString();
-    if (!invalidJsonWarnings.has(key)) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (message.includes('JSON')) {
-        invalidJsonWarnings.add(key);
-        void vscode.window.showWarningMessage(vscode.l10n.t('Configuration file is invalid JSON. Defaults are being used until fixed.'));
-      }
-    }
-
-    return {};
-  }
+  const metadata = await readConfigWithMetadata(folder);
+  return metadata.config;
 }
 
 async function writeConfig(folder: vscode.WorkspaceFolder, config: ScalaLiteWorkspaceConfig): Promise<void> {

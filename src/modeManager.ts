@@ -364,6 +364,7 @@ export interface ModeManagerOptions {
   readonly workspaceSymbolProvider?: vscode.WorkspaceSymbolProvider;
   readonly referenceProvider?: vscode.ReferenceProvider;
   readonly getNativeEngineStatusLabel?: () => string;
+  readonly getConfigSourceLabel?: () => string;
 }
 
 export class ModeManager implements vscode.Disposable {
@@ -409,6 +410,10 @@ export class ModeManager implements vscode.Disposable {
 
   public isBuildIntegrationEnabled(): boolean {
     return this.buildIntegrationEnabled;
+  }
+
+  public refreshStatusBar(): void {
+    this.updateStatusBar(this.activeMode);
   }
 
   public dispose(): void {
@@ -657,9 +662,10 @@ export class ModeManager implements vscode.Disposable {
     const detectedBuild = this.options.getBuildIntegrationLabel?.() ?? 'none';
     const buildLabel = this.buildIntegrationEnabled ? detectedBuild : 'Off';
     const nativeEngineLabel = this.options.getNativeEngineStatusLabel?.() ?? 'fallback';
+    const configSourceLabel = this.options.getConfigSourceLabel?.() ?? 'defaults';
 
     this.statusBarItem.text = `SL: [Index: ${indexLabel}] [Diag: ${diagnosticsLabel}] [Build: ${buildLabel}]`;
-    this.statusBarItem.tooltip = `${details.text} ${details.description}\n${details.impact}\nNative engine: ${nativeEngineLabel}`;
+    this.statusBarItem.tooltip = `${details.text} ${details.description}\n${details.impact}\nNative engine: ${nativeEngineLabel}\nConfig: ${configSourceLabel}`;
   }
 
   private releaseModeResources(): void {

@@ -14,6 +14,7 @@ docs/**
 !assets/**
 
 # Native engine source (keep only built binaries if they exist)
+!native/scala-lite-engine/*.node
 !native/scala-lite-engine/bindings/*.node
 native/scala-lite-engine/src/**
 native/scala-lite-engine/tests/**
@@ -36,8 +37,28 @@ native/scala-lite-engine/**/*.rs
 **/*.test.ts
 **/*.test.js
 
-# Dependencies (already bundled)
+# Dependencies (include only runtime deps needed at activation)
 node_modules/**
+!node_modules/jszip/**
+!node_modules/minimatch/**
+!node_modules/tslib/**
+!node_modules/lie/**
+!node_modules/pako/**
+!node_modules/readable-stream/**
+!node_modules/setimmediate/**
+!node_modules/immediate/**
+!node_modules/brace-expansion/**
+!node_modules/balanced-match/**
+!node_modules/core-util-is/**
+!node_modules/inherits/**
+!node_modules/isarray/**
+!node_modules/process-nextick-args/**
+!node_modules/safe-buffer/**
+!node_modules/string_decoder/**
+!node_modules/util-deprecate/**
+!node_modules/@emnapi/**
+!node_modules/@napi-rs/**
+!node_modules/@tybys/**
 
 # Package management
 package-lock.json

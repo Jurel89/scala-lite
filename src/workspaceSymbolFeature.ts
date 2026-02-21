@@ -4,6 +4,7 @@ import { WorkspaceMode } from './modePresentation';
 import { IndexedSymbol, SymbolIndexManager } from './symbolIndex';
 import { readModuleFolderFromWorkspaceConfig } from './workspaceConfig';
 import { formatResultBadge, ResultSource } from './resultBadges';
+import { compareSymbols } from './symbolSort';
 
 interface RankedSymbol {
   readonly symbol: IndexedSymbol;
@@ -156,7 +157,7 @@ export class WorkspaceSymbolSearchProvider implements vscode.WorkspaceSymbolProv
         return right.recencyScore - left.recencyScore;
       }
 
-      return left.symbol.symbolName.localeCompare(right.symbol.symbolName);
+      return compareSymbols(left.symbol, right.symbol);
     });
 
     return ranked.slice(0, 200).map((entry) => {

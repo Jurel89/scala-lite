@@ -361,6 +361,7 @@ export interface ModeManagerOptions {
   readonly getBuildIntegrationLabel?: () => string;
   readonly onBuildIntegrationChanged?: (enabled: boolean) => void | Promise<void>;
   readonly definitionProvider?: vscode.DefinitionProvider;
+  readonly hoverProvider?: vscode.HoverProvider;
   readonly workspaceSymbolProvider?: vscode.WorkspaceSymbolProvider;
   readonly referenceProvider?: vscode.ReferenceProvider;
   readonly getNativeEngineStatusLabel?: () => string;
@@ -394,7 +395,7 @@ export class ModeManager implements vscode.Disposable {
 
     const storedMode = ensureWorkspaceMode(this.context.workspaceState.get<string>(MODE_STORAGE_KEY));
     const configuredDefaultMode = ensureWorkspaceMode(await readDefaultModeFromWorkspaceConfig());
-    const initialMode = storedMode ?? configuredDefaultMode ?? 'A';
+    const initialMode = storedMode ?? configuredDefaultMode ?? 'C';
 
     await this.switchMode(initialMode, false);
   }
@@ -699,6 +700,10 @@ export class ModeManager implements vscode.Disposable {
         }
       });
 
+      const hoverProvider = this.options.hoverProvider
+        ? vscode.languages.registerHoverProvider(selector, this.options.hoverProvider)
+        : undefined;
+
       const definitionProvider = vscode.languages.registerDefinitionProvider(selector, {
         provideDefinition: (...args) => {
           if (this.options.definitionProvider) {
@@ -714,6 +719,9 @@ export class ModeManager implements vscode.Disposable {
         : undefined;
 
       disposables.push(codeLensProvider, definitionProvider);
+      if (hoverProvider) {
+        disposables.push(hoverProvider);
+      }
       if (workspaceSymbolProvider) {
         disposables.push(workspaceSymbolProvider);
       }
@@ -748,6 +756,10 @@ export class ModeManager implements vscode.Disposable {
         }
       } catch {
       }
+    }
+
+    if (!userInitiated) {
+      return workspaceFolder.uri;
     }
 
     const selected = await vscode.window.showOpenDialog({

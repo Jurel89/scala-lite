@@ -54,3 +54,25 @@ test('IN-0002: package includes native build/test helper scripts', () => {
   assert.equal(typeof packageJson.scripts['native:build'], 'string');
   assert.equal(typeof packageJson.scripts['native:test'], 'string');
 });
+
+test('IN-0002: native bridge normalizes Rust payload field names to TypeScript model', () => {
+  const source = readSource('src/nativeEngine.ts');
+  assert.equal(source.includes('normalizeNativeSymbol('), true);
+  assert.equal(source.includes('raw.file_path'), true);
+  assert.equal(source.includes('raw.line_number'), true);
+  assert.equal(source.includes('raw.container_name'), true);
+  assert.equal(source.includes('normalizeNativeParseResult('), true);
+});
+
+test('IN-0002: hover provider is wired for non-Mode-A states', () => {
+  const extensionSource = readSource('src/extension.ts');
+  const modeSource = readSource('src/modeManager.ts');
+  const hoverSource = readSource('src/hoverInfoFeature.ts');
+
+  assert.equal(extensionSource.includes('new HoverInfoProvider(definitionProvider, () => activeMode, logger)'), true);
+  assert.equal(modeSource.includes('registerHoverProvider'), true);
+  assert.equal(modeSource.includes('readonly hoverProvider?: vscode.HoverProvider;'), true);
+  assert.equal(hoverSource.includes('readDefinitionPreview'), true);
+  assert.equal(hoverSource.includes("appendCodeblock(definitionPreview, 'scala')"), true);
+  assert.equal(hoverSource.includes("vscode.l10n.t('Definition')"), true);
+});

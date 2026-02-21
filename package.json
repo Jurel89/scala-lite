@@ -182,7 +182,7 @@
             "B",
             "C"
           ],
-          "default": "A",
+          "default": "C",
           "description": "%configuration.scalaLite.mode.description%"
         },
         "scalaLite.logLevel": {
@@ -219,6 +219,23 @@
           "type": "string",
           "default": "",
           "description": "%configuration.scalaLite.activeProfile.description%"
+        },
+        "scalaLite.goToDefinition.stickyCache.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "%configuration.scalaLite.goToDefinition.stickyCache.enabled.description%"
+        },
+        "scalaLite.goToDefinition.stickyCache.bypass": {
+          "type": "boolean",
+          "default": false,
+          "description": "%configuration.scalaLite.goToDefinition.stickyCache.bypass.description%"
+        },
+        "scalaLite.hover.previewLines": {
+          "type": "number",
+          "default": 3,
+          "minimum": 0,
+          "maximum": 5,
+          "description": "%configuration.scalaLite.hover.previewLines.description%"
         }
       }
     },
@@ -269,6 +286,8 @@
   "scripts": {
     "clean": "rm -rf dist",
     "compile": "tsc -p ./",
+    "vscode:prepublish": "npm run compile && npm run native:build:napi",
+    "package:vsix": "npx @vscode/vsce package",
     "watch": "tsc -watch -p ./",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext .ts",

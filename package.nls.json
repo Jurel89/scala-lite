@@ -29,5 +29,8 @@
   "configuration.scalaLite.diagnostics.enabled.description": "Enable or disable syntax diagnostics collection.",
   "configuration.scalaLite.diagnostics.trigger.description": "When diagnostics should run: on save or on type.",
   "configuration.scalaLite.formatter.formatOnSave.description": "Run formatter automatically when saving Scala files.",
-  "configuration.scalaLite.activeProfile.description": "Active Scala Lite task profile name for this workspace."
+  "configuration.scalaLite.activeProfile.description": "Active Scala Lite task profile name for this workspace.",
+  "configuration.scalaLite.goToDefinition.stickyCache.enabled.description": "Cache chooser selections in-memory to auto-jump repeated go-to-definition requests in the same context.",
+  "configuration.scalaLite.goToDefinition.stickyCache.bypass.description": "Bypass sticky go-to-definition cache and always run full staged resolution.",
+  "configuration.scalaLite.hover.previewLines.description": "Number of definition body preview lines to show in high-confidence hover cards (0-5)."
 }

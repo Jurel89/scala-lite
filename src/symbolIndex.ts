@@ -5,17 +5,44 @@ import { WorkspaceMode } from './modePresentation';
 import { readModuleFolderFromWorkspaceConfig } from './workspaceConfig';
 import { resolveWorkspaceIgnoreRules } from './ignoreRules';
 import { NativeDiagnostic, NativeParseResult, NativeEngine } from './nativeEngine';
+import { compareSymbols } from './symbolSort';
 
 export const COMMAND_REBUILD_INDEX = 'scalaLite.rebuildIndex';
 
-type SymbolKind = 'package' | 'object' | 'class' | 'trait' | 'def' | 'val' | 'type';
+type SymbolKind = 'package' | 'object' | 'class' | 'trait' | 'def' | 'val' | 'type' | 'param';
+type SymbolVisibility = 'public' | 'protected' | 'private' | 'unknown';
+
+function isValidIndexedSymbol(symbol: IndexedSymbol | undefined): symbol is IndexedSymbol {
+  if (!symbol) {
+    return false;
+  }
+
+  return typeof symbol.symbolName === 'string'
+    && symbol.symbolName.length > 0
+    && typeof symbol.filePath === 'string'
+    && symbol.filePath.length > 0
+    && typeof symbol.lineNumber === 'number'
+    && Number.isFinite(symbol.lineNumber)
+    && typeof symbol.packageName === 'string'
+    && typeof symbol.visibility === 'string';
+}
 
 export interface IndexedSymbol {
   readonly symbolName: string;
   readonly symbolKind: SymbolKind;
   readonly filePath: string;
   readonly lineNumber: number;
+  readonly packageName: string;
+  readonly visibility: SymbolVisibility;
   readonly containerName?: string;
+}
+
+export interface ImportRecord {
+  readonly packagePath: string;
+  readonly importedName?: string;
+  readonly sourceSymbolName?: string;
+  readonly isWildcard: boolean;
+  readonly lineNumber: number;
 }
 
 function isIndexableFile(document: vscode.TextDocument): boolean {
@@ -25,6 +52,7 @@ function isIndexableFile(document: vscode.TextDocument): boolean {
 function extractSymbols(document: vscode.TextDocument): IndexedSymbol[] {
   const symbols: IndexedSymbol[] = [];
   let currentContainerName: string | undefined;
+  let currentPackageName = '';
 
   const packageRegex = /^\s*package\s+([A-Za-z0-9_.]+)/;
   const objectRegex = /^\s*object\s+([A-Za-z0-9_]+)/;
@@ -34,16 +62,36 @@ function extractSymbols(document: vscode.TextDocument): IndexedSymbol[] {
   const valRegex = /^\s*(?:private\s+|protected\s+)*val\s+([A-Za-z0-9_]+)/;
   const typeRegex = /^\s*type\s+([A-Za-z0-9_]+)/;
 
+  const inferVisibility = (lineText: string): SymbolVisibility => {
+    const normalized = lineText.trimStart();
+    if (normalized.startsWith('private')) {
+      return 'private';
+    }
+    if (normalized.startsWith('protected')) {
+      return 'protected';
+    }
+    if (/^(package|object|class|trait|def|val|var|type|enum|given)\b/.test(normalized)) {
+      return 'public';
+    }
+
+    return 'unknown';
+  };
+
   for (let index = 0; index < document.lineCount; index += 1) {
     const line = document.lineAt(index).text;
 
     const packageMatch = line.match(packageRegex);
     if (packageMatch) {
+      if (!currentPackageName) {
+        currentPackageName = packageMatch[1];
+      }
       symbols.push({
         symbolName: packageMatch[1],
         symbolKind: 'package',
         filePath: document.uri.fsPath,
-        lineNumber: index + 1
+        lineNumber: index + 1,
+        packageName: currentPackageName,
+        visibility: inferVisibility(line)
       });
       currentContainerName = packageMatch[1];
       continue;
@@ -56,6 +104,8 @@ function extractSymbols(document: vscode.TextDocument): IndexedSymbol[] {
         symbolKind: 'object',
         filePath: document.uri.fsPath,
         lineNumber: index + 1,
+        packageName: currentPackageName,
+        visibility: inferVisibility(line),
         containerName: currentContainerName
       });
       currentContainerName = objectMatch[1];
@@ -69,6 +119,8 @@ function extractSymbols(document: vscode.TextDocument): IndexedSymbol[] {
         symbolKind: 'class',
         filePath: document.uri.fsPath,
         lineNumber: index + 1,
+        packageName: currentPackageName,
+        visibility: inferVisibility(line),
         containerName: currentContainerName
       });
       continue;
@@ -81,6 +133,8 @@ function extractSymbols(document: vscode.TextDocument): IndexedSymbol[] {
         symbolKind: 'trait',
         filePath: document.uri.fsPath,
         lineNumber: index + 1,
+        packageName: currentPackageName,
+        visibility: inferVisibility(line),
         containerName: currentContainerName
       });
       continue;
@@ -93,6 +147,8 @@ function extractSymbols(document: vscode.TextDocument): IndexedSymbol[] {
         symbolKind: 'def',
         filePath: document.uri.fsPath,
         lineNumber: index + 1,
+        packageName: currentPackageName,
+        visibility: inferVisibility(line),
         containerName: currentContainerName
       });
       continue;
@@ -105,6 +161,8 @@ function extractSymbols(document: vscode.TextDocument): IndexedSymbol[] {
         symbolKind: 'val',
         filePath: document.uri.fsPath,
         lineNumber: index + 1,
+        packageName: currentPackageName,
+        visibility: inferVisibility(line),
         containerName: currentContainerName
       });
       continue;
@@ -117,6 +175,8 @@ function extractSymbols(document: vscode.TextDocument): IndexedSymbol[] {
         symbolKind: 'type',
         filePath: document.uri.fsPath,
         lineNumber: index + 1,
+        packageName: currentPackageName,
+        visibility: inferVisibility(line),
         containerName: currentContainerName
       });
     }
@@ -130,6 +190,8 @@ export class SymbolIndexManager implements vscode.Disposable {
   private readonly getNativeEngine: () => NativeEngine;
   private readonly indexByFile = new Map<string, IndexedSymbol[]>();
   private readonly diagnosticsByFile = new Map<string, NativeDiagnostic[]>();
+  private readonly importsByFile = new Map<string, ImportRecord[]>();
+  private readonly packageByFile = new Map<string, string>();
   private readonly contentByFile = new Map<string, string>();
   private readonly fileCloseEvictionTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private currentMode: WorkspaceMode = 'A';
@@ -185,6 +247,8 @@ export class SymbolIndexManager implements vscode.Disposable {
         this.indexByFile.delete(key);
         this.contentByFile.delete(document.uri.fsPath);
         this.diagnosticsByFile.delete(document.uri.fsPath);
+        this.importsByFile.delete(key);
+        this.packageByFile.delete(document.uri.fsPath);
         this.fileCloseEvictionTimers.delete(key);
         void this.evictFileFromNativeIndex(document.uri.fsPath);
       }, 1000);
@@ -206,6 +270,8 @@ export class SymbolIndexManager implements vscode.Disposable {
     this.indexByFile.clear();
     this.contentByFile.clear();
     this.diagnosticsByFile.clear();
+    this.importsByFile.clear();
+    this.packageByFile.clear();
   }
 
   public async setMode(mode: WorkspaceMode): Promise<void> {
@@ -219,13 +285,86 @@ export class SymbolIndexManager implements vscode.Disposable {
   public getAllSymbols(): readonly IndexedSymbol[] {
     const result: IndexedSymbol[] = [];
     for (const symbols of this.indexByFile.values()) {
-      result.push(...symbols);
+      result.push(...symbols.filter((symbol) => isValidIndexedSymbol(symbol)));
     }
     return result;
   }
 
   public getSymbolsForFile(documentUri: vscode.Uri): readonly IndexedSymbol[] {
     return this.indexByFile.get(documentUri.toString()) ?? [];
+  }
+
+  public getImportsForFile(documentUri: vscode.Uri): readonly ImportRecord[] {
+    return this.importsByFile.get(documentUri.toString()) ?? [];
+  }
+
+  public getSymbolsForPackage(packagePath: string): readonly IndexedSymbol[] {
+    if (!packagePath) {
+      return [];
+    }
+
+    const matches: IndexedSymbol[] = [];
+    for (const symbols of this.indexByFile.values()) {
+      for (const symbol of symbols) {
+        if (symbol.symbolKind === 'package') {
+          continue;
+        }
+
+        const symbolPackage = symbol.packageName || this.packageByFile.get(symbol.filePath);
+        if (symbolPackage === packagePath) {
+          matches.push(symbol);
+        }
+      }
+    }
+
+    return matches.sort((left, right) => compareSymbols(left, right));
+  }
+
+  public async querySymbolsInPackage(
+    query: string,
+    packagePath: string,
+    limit: number,
+    token?: vscode.CancellationToken
+  ): Promise<readonly IndexedSymbol[]> {
+    if (this.currentMode === 'A' || !query.trim() || !packagePath.trim()) {
+      return [];
+    }
+
+    if (token?.isCancellationRequested) {
+      return [];
+    }
+
+    try {
+      const nativeMatches = await this.getNativeEngine().querySymbolsInPackage(query.trim(), packagePath.trim(), limit, token);
+      if (nativeMatches.length > 0) {
+        return nativeMatches.filter((symbol) => isValidIndexedSymbol(symbol));
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn('INDEX', `Native query_symbols_in_package failed. Falling back to in-memory scan. ${message}`);
+    }
+
+    return this.getSymbolsForPackage(packagePath)
+      .filter((symbol) => symbol.symbolName === query.trim())
+      .slice(0, Math.max(1, limit));
+  }
+
+  public async packageExists(packagePath: string, token?: vscode.CancellationToken): Promise<boolean> {
+    if (!packagePath.trim()) {
+      return false;
+    }
+
+    if (token?.isCancellationRequested) {
+      return false;
+    }
+
+    try {
+      return await this.getNativeEngine().queryPackageExists(packagePath.trim(), token);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn('INDEX', `Native query_package_exists failed. Falling back to in-memory package map. ${message}`);
+      return Array.from(this.packageByFile.values()).some((entry) => entry === packagePath.trim());
+    }
   }
 
   public async searchSymbols(
@@ -247,7 +386,8 @@ export class SymbolIndexManager implements vscode.Disposable {
     }
 
     try {
-      const nativeMatches = await this.getNativeEngine().querySymbols(normalized, limit, token);
+      const nativeMatches = (await this.getNativeEngine().querySymbols(normalized, limit, token))
+        .filter((symbol) => isValidIndexedSymbol(symbol));
       if (nativeMatches.length > 0) {
         return nativeMatches;
       }
@@ -286,6 +426,8 @@ export class SymbolIndexManager implements vscode.Disposable {
     this.indexByFile.clear();
     this.contentByFile.clear();
     this.diagnosticsByFile.clear();
+    this.importsByFile.clear();
+    this.packageByFile.clear();
 
     if (token?.isCancellationRequested) {
       return;
@@ -298,6 +440,7 @@ export class SymbolIndexManager implements vscode.Disposable {
 
     if (this.currentMode === 'B') {
       const openTextDocuments = vscode.workspace.textDocuments.filter((document) => isIndexableFile(document));
+      this.logger.debug('INDEX', `Mode B rebuild started with ${openTextDocuments.length} open indexable file(s).`);
       for (const document of openTextDocuments) {
         if (token?.isCancellationRequested) {
           this.logger.info('INDEX', 'Mode B index rebuild cancelled.');
@@ -353,14 +496,28 @@ export class SymbolIndexManager implements vscode.Disposable {
 
     await this.syncNativeIndex(token);
 
+    this.logger.debug('INDEX', `Mode C rebuild completed with ${this.contentByFile.size} file(s) loaded in memory.`);
+
     this.logger.info('INDEX', `Mode C index rebuilt from ${filteredFiles.length} file(s).`);
   }
 
   private async indexDocument(document: vscode.TextDocument, token?: vscode.CancellationToken): Promise<void> {
     const content = document.getText();
     const parsed = await this.tryParseWithNative(document.uri.fsPath, content, token);
-    const symbols = parsed?.symbols ?? extractSymbols(document);
+    const symbols = (parsed?.symbols ?? extractSymbols(document)).filter((symbol) => isValidIndexedSymbol(symbol));
+    const imports = parsed?.imports ?? [];
+    this.logger.debug(
+      'INDEX',
+      `Indexed ${document.uri.fsPath} with ${symbols.length} symbol(s) using ${parsed ? 'native' : 'typescript'} parser.`
+    );
     this.indexByFile.set(document.uri.toString(), [...symbols]);
+    this.importsByFile.set(document.uri.toString(), [...imports]);
+    const packageSymbol = symbols.find((symbol) => symbol.symbolKind === 'package');
+    if (packageSymbol) {
+      this.packageByFile.set(document.uri.fsPath, packageSymbol.packageName || packageSymbol.symbolName);
+    } else {
+      this.packageByFile.delete(document.uri.fsPath);
+    }
     this.contentByFile.set(document.uri.fsPath, content);
     this.diagnosticsByFile.set(document.uri.fsPath, [...(parsed?.diagnostics ?? [])]);
   }
@@ -394,7 +551,8 @@ export class SymbolIndexManager implements vscode.Disposable {
     }));
 
     try {
-      await this.getNativeEngine().rebuildIndex(files, token);
+      const total = await this.getNativeEngine().rebuildIndex(files, token);
+      this.logger.debug('INDEX', `Native index sync completed for ${files.length} file(s), ${total} symbol(s).`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.warn('INDEX', `Native rebuild_index failed. Continuing with TypeScript index fallback. ${message}`);
@@ -413,6 +571,10 @@ export class SymbolIndexManager implements vscode.Disposable {
     const ranked: Array<{ score: number; symbol: IndexedSymbol }> = [];
 
     for (const symbol of this.getAllSymbols()) {
+      if (!isValidIndexedSymbol(symbol)) {
+        continue;
+      }
+
       const score = this.fuzzyScore(normalizedQuery, symbol.symbolName.toLowerCase());
       if (score === undefined) {
         continue;
@@ -421,7 +583,13 @@ export class SymbolIndexManager implements vscode.Disposable {
       ranked.push({ score, symbol });
     }
 
-    ranked.sort((left, right) => right.score - left.score);
+    ranked.sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+
+      return compareSymbols(left.symbol, right.symbol);
+    });
     return ranked.slice(0, Math.max(1, limit)).map((entry) => entry.symbol);
   }
 

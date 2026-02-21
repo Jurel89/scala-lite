@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { vscodeMock } from './vscode-mock';
+import { GoToDefinitionProvider } from '../goToDefinitionFeature';
 
 function readSource(relativePath: string): string {
   const filePath = path.resolve(process.cwd(), relativePath);
@@ -14,18 +16,89 @@ test('FR-0006: mode manager supports injected definition provider', () => {
   assert.equal(source.includes('this.options.definitionProvider.provideDefinition'), true);
 });
 
-test('FR-0006: go-to-definition includes tier badges and fallback search UX', () => {
-  const source = readSource('src/goToDefinitionFeature.ts');
-  assert.equal(source.includes('Exact'), true);
-  assert.equal(source.includes('📍 Likely'), true);
-  assert.equal(source.includes('🔍 Text Search'), true);
-  assert.equal(source.includes('await this.symbolIndexManager.searchSymbols(symbolName, 200, token)'), true);
-  assert.equal(source.includes('private async prioritizeTextSearchFiles('), true);
-  assert.equal(source.includes('await this.symbolIndexManager.searchSymbols(symbolName, 400, token)'), true);
-  assert.equal(source.includes('for (const fileUri of prioritizedFileUris)'), true);
-  assert.equal(source.includes('private async findIndexedDefinition('), true);
-  assert.equal(source.includes('Open Find in Files'), true);
-  assert.equal(source.includes('Select definition for {0}'), true);
+test('FR-0006: GoToDefinitionProvider resolves exact match in same file (Stage B)', async () => {
+  const mockSymbolIndexManager = {
+    getSymbolsForFile: (uri: any) => {
+      if (uri.fsPath === '/workspace/src/Main.scala') {
+        return [{
+          symbolName: 'myTargetSymbol',
+          symbolKind: 'def',
+          filePath: '/workspace/src/Main.scala',
+          lineNumber: 42,
+          containerName: 'Main',
+          packageName: 'com.example',
+          visibility: 'public'
+        }];
+      }
+      return [];
+    },
+    getImportsForFile: () => [],
+    querySymbolsInPackage: async () => [],
+    searchSymbols: async () => []
+  } as any;
+
+  const mockLogger = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as any;
+  const provider = new GoToDefinitionProvider(mockSymbolIndexManager, () => 'C' as any, mockLogger);
+
+  const mockDocument = {
+    uri: vscodeMock.Uri.file('/workspace/src/Main.scala'),
+    fileName: '/workspace/src/Main.scala',
+    lineCount: 100,
+    lineAt: (line: number) => ({ text: line === 0 ? 'package com.example' : '' }),
+    getWordRangeAtPosition: () => new vscodeMock.Range(new vscodeMock.Position(10, 5), new vscodeMock.Position(10, 19)),
+    getText: () => 'myTargetSymbol'
+  } as any;
+
+  const mockPosition = new vscodeMock.Position(10, 10) as any;
+  const mockToken = new vscodeMock.CancellationTokenSource().token as any;
+
+  const result = await provider.provideDefinition(mockDocument, mockPosition, mockToken) as any;
+
+  assert.ok(result, 'Expected a definition result');
+  assert.equal(Array.isArray(result) ? result.length : 1, 1, 'Expected exactly one location');
+  
+  const location = Array.isArray(result) ? result[0] : result;
+  assert.equal(location.uri.fsPath, '/workspace/src/Main.scala');
+  assert.equal(location.range.start.line, 41);
+});
+
+test('FR-0006: GoToDefinitionProvider falls back to text search (Stage F) when no symbols found', async () => {
+  let searchSymbolsCalled = false;
+  let searchLimit = 0;
+
+  const mockSymbolIndexManager = {
+    getSymbolsForFile: () => [],
+    getImportsForFile: () => [],
+    querySymbolsInPackage: async () => [],
+    searchSymbols: async (query: string, limit: number) => {
+      searchSymbolsCalled = true;
+      searchLimit = limit;
+      return [];
+    }
+  } as any;
+
+  const mockLogger = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as any;
+  const provider = new GoToDefinitionProvider(mockSymbolIndexManager, () => 'C' as any, mockLogger);
+
+  const mockDocument = {
+    uri: vscodeMock.Uri.file('/workspace/src/Main.scala'),
+    fileName: '/workspace/src/Main.scala',
+    lineCount: 100,
+    lineAt: (line: number) => ({ text: line === 0 ? 'package com.example' : '' }),
+    getWordRangeAtPosition: () => new vscodeMock.Range(new vscodeMock.Position(10, 5), new vscodeMock.Position(10, 19)),
+    getText: () => 'unknownSymbol'
+  } as any;
+
+  const mockPosition = new vscodeMock.Position(10, 10) as any;
+  const mockToken = new vscodeMock.CancellationTokenSource().token as any;
+
+  (vscodeMock.workspace as any).findFiles = async () => [];
+
+  const result = await provider.provideDefinition(mockDocument, mockPosition, mockToken);
+
+  assert.equal(searchSymbolsCalled, true, 'Expected searchSymbols to be called for Stage E/F fallback');
+  assert.equal(searchLimit, 300, 'Expected search limit to be 300 as per TRD');
+  assert.deepEqual(result, [], 'Expected empty result when text search also fails');
 });
 
 test('FR-0006: extension wires go-to-definition provider with active mode context', () => {

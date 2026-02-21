@@ -50,3 +50,10 @@ test('IN-0003: syntax diagnostics controller reads diagnostics from SymbolIndexM
   assert.equal(source.includes("createDiagnosticCollection('scala-lite-syntax')"), true);
   assert.equal(source.includes("diagnostic.source = 'Scala Lite (syntax)'"), true);
 });
+
+test('IN-0003: symbol index search guards against malformed symbol records', () => {
+  const source = readSource('src/symbolIndex.ts');
+  assert.equal(source.includes('isValidIndexedSymbol'), true);
+  assert.equal(source.includes('symbols.filter((symbol) => isValidIndexedSymbol(symbol))'), true);
+  assert.equal(source.includes('if (!isValidIndexedSymbol(symbol))'), true);
+});

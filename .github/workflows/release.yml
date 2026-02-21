@@ -67,7 +67,7 @@ jobs:
           ls -lh "${{ steps.meta.outputs.vsix }}"
           unzip -l "${{ steps.meta.outputs.vsix }}" | grep 'native/scala-lite-engine/bindings/.*\.node' || true
 
-          VSIX_SIZE_BYTES=$(stat -c%s "${{ steps.meta.outputs.vsix }}")
+          VSIX_SIZE_BYTES=$(wc -c < "${{ steps.meta.outputs.vsix }}")
           VSIX_SIZE_MB=$((VSIX_SIZE_BYTES / 1024 / 1024))
           if [ "$VSIX_SIZE_MB" -gt 15 ]; then
             echo "VSIX size budget exceeded: ${VSIX_SIZE_MB}MB (limit: 15MB)."

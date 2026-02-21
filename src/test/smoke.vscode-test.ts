@@ -6,16 +6,15 @@ async function main(): Promise<void> {
   const extensionTestsPath = path.resolve(__dirname, 'smoke', 'extensionHost.js');
   const fixtureWorkspacePath = path.resolve(__dirname, 'fixtures', 'smoke-workspace');
 
-  try {
-    await runTests({
-      extensionDevelopmentPath,
-      extensionTestsPath,
-      launchArgs: [fixtureWorkspacePath, '--disable-extensions']
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Smoke test bootstrap failed: ${message}`);
-  }
+  await runTests({
+    extensionDevelopmentPath,
+    extensionTestsPath,
+    launchArgs: [fixtureWorkspacePath, '--disable-extensions']
+  });
 }
 
-void main();
+void main().catch((error) => {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`Smoke test bootstrap failed: ${message}`);
+  process.exit(1);
+});

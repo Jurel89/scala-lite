@@ -135,7 +135,6 @@ export function registerWorkspaceConfigFeature(options: WorkspaceConfigFeatureOp
   };
 
   const fileCreatedDisposable = configFileWatcher.onDidCreate(onConfigFileChanged);
-  const fileChangedDisposable = configFileWatcher.onDidChange(onConfigFileChanged);
   const fileDeletedDisposable = configFileWatcher.onDidDelete(onConfigFileChanged);
 
   void reloadWorkspaceConfiguration(options);
@@ -147,7 +146,6 @@ export function registerWorkspaceConfigFeature(options: WorkspaceConfigFeatureOp
     settingsWatcherDisposable,
     configFileWatcher,
     fileCreatedDisposable,
-    fileChangedDisposable,
     fileDeletedDisposable
   ];
 }

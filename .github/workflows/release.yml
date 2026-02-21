@@ -1,0 +1,68 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npm run lint
+
+      - run: npm test
+
+      - name: Package VSIX
+        run: npx @vscode/vsce package --no-dependencies
+
+      - name: Determine version and artifact name
+        id: meta
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "vsix=scala-lite-${VERSION}.vsix" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure expected VSIX name
+        run: |
+          ACTUAL_VSIX=$(ls -1 *.vsix | head -n 1)
+          mv "$ACTUAL_VSIX" "${{ steps.meta.outputs.vsix }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.vsix }}
+          path: ${{ steps.meta.outputs.vsix }}
+
+      - name: Build release notes from CHANGELOG
+        run: |
+          awk '
+            /^## \[Unreleased\]/ { in_section=1; next }
+            /^## \[/ { if (in_section) exit }
+            in_section { print }
+          ' CHANGELOG.md > RELEASE_NOTES.md
+
+          if [ ! -s RELEASE_NOTES.md ]; then
+            echo "See CHANGELOG.md for release notes." > RELEASE_NOTES.md
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Scala Lite v${{ steps.meta.outputs.version }}
+          body_path: RELEASE_NOTES.md
+          files: ${{ steps.meta.outputs.vsix }}

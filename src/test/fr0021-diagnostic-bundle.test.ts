@@ -20,7 +20,8 @@ test('FR-0021: diagnostic bundle contains required components', async () => {
       vscodeVersion: '1.0.0',
       platform: 'darwin',
       arch: 'arm64',
-      nodeVersion: 'v22.0.0'
+      nodeVersion: 'v22.0.0',
+      nativeEngineStatus: 'fallback'
     }
   });
 

@@ -203,6 +203,17 @@
       },
       "additionalProperties": false
     },
+    "workspaceDoctor": {
+      "type": "object",
+      "description": "Workspace Doctor execution settings.",
+      "properties": {
+        "autoRunOnOpen": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
     "logLevel": {
       "type": "string",
       "enum": ["DEBUG", "INFO", "WARN", "ERROR"],

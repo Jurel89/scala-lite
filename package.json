@@ -4,7 +4,7 @@
   "description": "Performance-first Scala workflow extension for VS Code.",
   "version": "0.0.1",
   "publisher": "jurel89",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "engines": {
     "vscode": "^1.95.0"
   },
@@ -13,7 +13,10 @@
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
-    "onStartupFinished"
+    "onLanguage:scala",
+    "workspaceContains:**/*.scala",
+    "workspaceContains:**/*.sbt",
+    "workspaceContains:**/build.sc"
   ],
   "contributes": {
     "commands": [
@@ -25,6 +28,11 @@
       {
         "command": "scalaLite.reDetectBuildTool",
         "title": "%command.scalaLite.reDetectBuildTool.title%",
+        "category": "%commandCategory.scalaLite%"
+      },
+      {
+        "command": "scalaLite.pickWorkspaceMode",
+        "title": "%command.scalaLite.pickWorkspaceMode.title%",
         "category": "%commandCategory.scalaLite%"
       },
       {
@@ -98,6 +106,11 @@
         "category": "%commandCategory.scalaLite%"
       },
       {
+        "command": "scalaLite.createConfiguration",
+        "title": "%command.scalaLite.createConfiguration.title%",
+        "category": "%commandCategory.scalaLite%"
+      },
+      {
         "command": "scalaLite.rebuildIndex",
         "title": "%command.scalaLite.rebuildIndex.title%",
         "category": "%commandCategory.scalaLite%"
@@ -131,6 +144,46 @@
     "configuration": {
       "title": "Scala Lite",
       "properties": {
+        "scalaLite.mode": {
+          "type": "string",
+          "enum": [
+            "A",
+            "B",
+            "C"
+          ],
+          "default": "A",
+          "description": "%configuration.scalaLite.mode.description%"
+        },
+        "scalaLite.logLevel": {
+          "type": "string",
+          "enum": [
+            "DEBUG",
+            "INFO",
+            "WARN",
+            "ERROR"
+          ],
+          "default": "INFO",
+          "description": "%configuration.scalaLite.logLevel.description%"
+        },
+        "scalaLite.diagnostics.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "%configuration.scalaLite.diagnostics.enabled.description%"
+        },
+        "scalaLite.diagnostics.trigger": {
+          "type": "string",
+          "enum": [
+            "onSave",
+            "onType"
+          ],
+          "default": "onSave",
+          "description": "%configuration.scalaLite.diagnostics.trigger.description%"
+        },
+        "scalaLite.formatter.formatOnSave": {
+          "type": "boolean",
+          "default": false,
+          "description": "%configuration.scalaLite.formatter.formatOnSave.description%"
+        },
         "scalaLite.activeProfile": {
           "type": "string",
           "default": "",

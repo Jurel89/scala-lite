@@ -79,6 +79,13 @@ test('FR-0023: extension wires workspace config feature registration', () => {
 test('FR-0023: defaults and key catalog are defined for config bootstrap and validation', () => {
   const source = readSource('src/workspaceConfig.ts');
   assert.equal(source.includes('buildDefaultWorkspaceConfig'), true);
+  assert.equal(source.includes("mode: 'C'"), true);
   assert.equal(source.includes('WORKSPACE_CONFIG_TOP_LEVEL_KEYS'), true);
   assert.equal(source.includes('openOrCreateWorkspaceConfig'), true);
+});
+
+test('FR-0023: settings UI default mode is C', () => {
+  const packageJson = readSource('package.json');
+  assert.equal(packageJson.includes('"scalaLite.mode"'), true);
+  assert.equal(packageJson.includes('"default": "C"'), true);
 });

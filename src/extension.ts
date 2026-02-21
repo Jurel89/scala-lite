@@ -43,6 +43,7 @@ import { GoToDefinitionProvider } from './goToDefinitionFeature';
 import { WorkspaceSymbolSearchProvider } from './workspaceSymbolFeature';
 import { FindUsagesProvider } from './findUsagesFeature';
 import { SyntaxDiagnosticsController } from './syntaxDiagnosticsFeature';
+import { HoverInfoProvider } from './hoverInfoFeature';
 
 const IDLE_AUDIT_DURATION_MS = 30_000;
 
@@ -163,6 +164,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const symbolIndexManager = new SymbolIndexManager(logger, () => getNativeEngine());
   symbolIndexManager.initialize(context);
   const definitionProvider = new GoToDefinitionProvider(symbolIndexManager, () => activeMode, logger);
+  const hoverProvider = new HoverInfoProvider(definitionProvider, () => activeMode, logger);
   const workspaceSymbolProvider = new WorkspaceSymbolSearchProvider(symbolIndexManager, () => activeMode);
   const referenceProvider = new FindUsagesProvider(symbolIndexManager, () => activeMode);
   const syntaxDiagnosticsController = new SyntaxDiagnosticsController(symbolIndexManager, () => activeMode, logger);
@@ -219,6 +221,7 @@ export function activate(context: vscode.ExtensionContext): void {
       ];
     },
     definitionProvider,
+    hoverProvider,
     workspaceSymbolProvider,
     referenceProvider,
     getNativeEngineStatusLabel: () => getNativeEngineStatus(),
@@ -333,7 +336,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   vscode.window.setStatusBarMessage(
-    vscode.l10n.t('Scala Lite activated in Mode A (event-driven only).'),
+    vscode.l10n.t('Scala Lite activated.'),
     3000
   );
 

@@ -334,7 +334,7 @@ function createDefaultProfile(buildTool: BuildTool = 'sbt'): TaskProfile {
 
 export function buildDefaultWorkspaceConfig(buildTool: BuildTool = 'sbt'): ScalaLiteWorkspaceConfig {
   return {
-    mode: 'A',
+    mode: 'C',
     moduleFolder: '',
     profiles: [createDefaultProfile(buildTool)],
     activeProfile: `Default (${buildTool === 'none' ? 'sbt' : buildTool})`,

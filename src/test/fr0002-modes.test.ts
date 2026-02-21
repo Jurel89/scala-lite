@@ -43,6 +43,11 @@ test('FR-0002: mode C persists selected module folder to scala-lite.json', () =>
   assert.equal(source.includes('writeIndexedModuleFolderToWorkspaceConfig('), true);
 });
 
+test('FR-0002: initial mode fallback defaults to Mode C when nothing is stored', () => {
+  const source = readSource('src/modeManager.ts');
+  assert.equal(source.includes("const initialMode = storedMode ?? configuredDefaultMode ?? 'C';"), true);
+});
+
 test('FR-0002: providers are only registered for non-Mode-A states', () => {
   const source = readSource('src/modeManager.ts');
   assert.equal(source.includes("if (mode === 'B' || mode === 'C')"), true);

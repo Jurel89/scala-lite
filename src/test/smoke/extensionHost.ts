@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as path from 'node:path';
 
 const EXTENSION_ID = 'jurel89.scala-lite';
 const ACTIVATION_TIMEOUT_MS = 10_000;
@@ -26,6 +27,19 @@ async function assertRequiredCommandsRegistered(): Promise<void> {
   }
 }
 
+async function assertGoToDefinitionProviderAvailable(fixtureWorkspacePath: string): Promise<void> {
+  const uri = vscode.Uri.file(path.join(fixtureWorkspacePath, 'Main.scala'));
+  const document = await vscode.workspace.openTextDocument(uri);
+  await vscode.window.showTextDocument(document);
+
+  const position = new vscode.Position(1, 6); // inside main identifier
+  const results = await vscode.commands.executeCommand<vscode.Location[]>('vscode.executeDefinitionProvider', document.uri, position);
+
+  if (!Array.isArray(results)) {
+    throw new Error('Definition provider did not return an array result.');
+  }
+}
+
 export async function run(): Promise<void> {
   const extension = vscode.extensions.getExtension(EXTENSION_ID);
   if (!extension) {
@@ -42,4 +56,5 @@ export async function run(): Promise<void> {
   }
 
   await assertRequiredCommandsRegistered();
+  await assertGoToDefinitionProviderAvailable(path.resolve(extension.extensionPath, 'src', 'test', 'fixtures', 'smoke-workspace'));
 }

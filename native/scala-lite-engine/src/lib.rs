@@ -3,7 +3,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
 
+#[cfg(feature = "napi")]
+use napi_derive::napi;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "napi", napi(object))]
 pub struct SymbolEntry {
     pub name: String,
     pub kind: String,
@@ -13,6 +17,7 @@ pub struct SymbolEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "napi", napi(object))]
 pub struct DiagnosticEntry {
     pub file_path: String,
     pub line_number: u32,
@@ -29,6 +34,7 @@ pub struct MemoryUsage {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "napi", napi(object))]
 pub struct ParseFileResult {
     pub symbols: Vec<SymbolEntry>,
     pub diagnostics: Vec<DiagnosticEntry>,
@@ -336,9 +342,9 @@ mod napi_bridge {
 
     #[napi(object)]
     pub struct JsMemoryUsage {
-        pub heap_bytes: u64,
-        pub native_rss_bytes: u64,
-        pub total_bytes: u64,
+        pub heap_bytes: i64,
+        pub native_rss_bytes: i64,
+        pub total_bytes: i64,
     }
 
     #[napi]
@@ -435,9 +441,9 @@ mod napi_bridge {
             let usage: MemoryUsage =
                 get_memory_usage(&guard).map_err(|error| Error::from_reason(error.to_string()))?;
             Ok(JsMemoryUsage {
-                heap_bytes: usage.heap_bytes,
-                native_rss_bytes: usage.native_rss_bytes,
-                total_bytes: usage.total_bytes,
+                heap_bytes: usage.heap_bytes.min(i64::MAX as u64) as i64,
+                native_rss_bytes: usage.native_rss_bytes.min(i64::MAX as u64) as i64,
+                total_bytes: usage.total_bytes.min(i64::MAX as u64) as i64,
             })
         }
 

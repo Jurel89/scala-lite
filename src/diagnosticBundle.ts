@@ -5,6 +5,7 @@ import {
   BundleInfo,
   createDiagnosticBundleBuffer
 } from './diagnosticBundleCore';
+import { getNativeEngineStatus } from './nativeEngineState';
 
 function sanitizeObject(value: unknown): unknown {
   if (typeof value === 'string') {
@@ -64,7 +65,8 @@ export async function createDiagnosticBundle(
     vscodeVersion: vscode.version,
     platform: os.platform(),
     arch: os.arch(),
-    nodeVersion: process.version
+    nodeVersion: process.version,
+    nativeEngineStatus: getNativeEngineStatus()
   };
 
   const workspaceConfig = await readWorkspaceConfig();

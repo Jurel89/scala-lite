@@ -31,7 +31,13 @@ type GovernorSelection =
   | 'diagnostics:off'
   | 'diagnostics:syntax'
   | 'build:off'
-  | 'build:on';
+  | 'build:on'
+  | 'action:rebuild-index'
+  | 'action:workspace-doctor'
+  | 'action:open-config'
+  | 'action:create-config'
+  | 'action:restart-native'
+  | 'action:idle-audit';
 
 interface GovernorQuickPickItem extends vscode.QuickPickItem {
   readonly selection?: GovernorSelection;
@@ -357,6 +363,7 @@ export interface ModeManagerOptions {
   readonly definitionProvider?: vscode.DefinitionProvider;
   readonly workspaceSymbolProvider?: vscode.WorkspaceSymbolProvider;
   readonly referenceProvider?: vscode.ReferenceProvider;
+  readonly getNativeEngineStatusLabel?: () => string;
 }
 
 export class ModeManager implements vscode.Disposable {
@@ -486,6 +493,34 @@ export class ModeManager implements vscode.Disposable {
         label: vscode.l10n.t('On'),
         description: this.buildIntegrationEnabled ? vscode.l10n.t('Current') : undefined,
         selection: 'build:on'
+      },
+      {
+        label: vscode.l10n.t('Quick Actions'),
+        kind: vscode.QuickPickItemKind.Separator
+      },
+      {
+        label: vscode.l10n.t('Rebuild Index'),
+        selection: 'action:rebuild-index'
+      },
+      {
+        label: vscode.l10n.t('Workspace Doctor'),
+        selection: 'action:workspace-doctor'
+      },
+      {
+        label: vscode.l10n.t('Open Configuration'),
+        selection: 'action:open-config'
+      },
+      {
+        label: vscode.l10n.t('Create Configuration'),
+        selection: 'action:create-config'
+      },
+      {
+        label: vscode.l10n.t('Restart Native Engine ({0})', this.options.getNativeEngineStatusLabel?.() ?? 'fallback'),
+        selection: 'action:restart-native'
+      },
+      {
+        label: vscode.l10n.t('Run Idle CPU Audit (30s)'),
+        selection: 'action:idle-audit'
       }
     ];
   }
@@ -526,6 +561,36 @@ export class ModeManager implements vscode.Disposable {
         await this.options.onBuildIntegrationChanged(this.buildIntegrationEnabled);
       }
       this.updateStatusBar(this.activeMode);
+      return;
+    }
+
+    if (selection === 'action:rebuild-index') {
+      await vscode.commands.executeCommand('scalaLite.rebuildIndex');
+      return;
+    }
+
+    if (selection === 'action:workspace-doctor') {
+      await vscode.commands.executeCommand('scalaLite.runWorkspaceDoctor');
+      return;
+    }
+
+    if (selection === 'action:open-config') {
+      await vscode.commands.executeCommand('scalaLite.openConfiguration');
+      return;
+    }
+
+    if (selection === 'action:create-config') {
+      await vscode.commands.executeCommand('scalaLite.createConfiguration');
+      return;
+    }
+
+    if (selection === 'action:restart-native') {
+      await vscode.commands.executeCommand('scalaLite.restartNativeEngine');
+      return;
+    }
+
+    if (selection === 'action:idle-audit') {
+      await vscode.commands.executeCommand('scalaLite.runIdleCpuAudit');
     }
   }
 
@@ -591,9 +656,10 @@ export class ModeManager implements vscode.Disposable {
     const diagnosticsLabel = this.diagnosticsLevel === 'off' ? 'Off' : 'Syntax';
     const detectedBuild = this.options.getBuildIntegrationLabel?.() ?? 'none';
     const buildLabel = this.buildIntegrationEnabled ? detectedBuild : 'Off';
+    const nativeEngineLabel = this.options.getNativeEngineStatusLabel?.() ?? 'fallback';
 
     this.statusBarItem.text = `SL: [Index: ${indexLabel}] [Diag: ${diagnosticsLabel}] [Build: ${buildLabel}]`;
-    this.statusBarItem.tooltip = `${details.text} ${details.description}\n${details.impact}`;
+    this.statusBarItem.tooltip = `${details.text} ${details.description}\n${details.impact}\nNative engine: ${nativeEngineLabel}`;
   }
 
   private releaseModeResources(): void {

@@ -203,6 +203,18 @@
       },
       "additionalProperties": false
     },
+    "workspaceDoctor": {
+      "type": "object",
+      "description": "Workspace Doctor execution settings.",
+      "properties": {
+        "autoRunOnOpen": {
+          "type": "boolean",
+          "description": "When enabled, Workspace Doctor runs automatically 30 seconds after opening the workspace (skipped for workspaces with >10,000 files).",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
     "logLevel": {
       "type": "string",
       "enum": ["DEBUG", "INFO", "WARN", "ERROR"],

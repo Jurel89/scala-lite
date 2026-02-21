@@ -6,6 +6,7 @@ export interface BundleInfo {
   readonly platform: string;
   readonly arch: string;
   readonly nodeVersion: string;
+  readonly nativeEngineStatus: string;
 }
 
 export interface DiagnosticBundleContent {

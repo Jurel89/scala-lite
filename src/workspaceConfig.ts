@@ -18,6 +18,7 @@ export const WORKSPACE_CONFIG_TOP_LEVEL_KEYS = [
   'diagnostics',
   'formatter',
   'linter',
+  'workspaceDoctor',
   'logLevel',
   'testFrameworkHints'
 ] as const;
@@ -63,6 +64,10 @@ export interface LinterConfig {
   readonly timeoutMs?: number;
 }
 
+export interface WorkspaceDoctorConfig {
+  readonly autoRunOnOpen?: boolean;
+}
+
 interface ScalaLiteWorkspaceConfig {
   readonly mode?: WorkspaceMode | {
     readonly default?: WorkspaceMode;
@@ -78,8 +83,17 @@ interface ScalaLiteWorkspaceConfig {
   readonly diagnostics?: DiagnosticsConfig;
   readonly formatter?: FormatterConfig;
   readonly linter?: LinterConfig;
+  readonly workspaceDoctor?: WorkspaceDoctorConfig;
   readonly testFrameworkHints?: readonly string[];
   readonly [key: string]: unknown;
+}
+
+interface EffectiveSettingsConfig {
+  readonly mode?: WorkspaceMode;
+  readonly logLevel?: ScalaLiteLogLevel;
+  readonly diagnosticsEnabled?: boolean;
+  readonly diagnosticsTrigger?: 'onSave' | 'onType';
+  readonly formatterFormatOnSave?: boolean;
 }
 
 const invalidJsonWarnings = new Set<string>();
@@ -90,6 +104,25 @@ function getPrimaryWorkspaceFolder(): vscode.WorkspaceFolder | undefined {
 
 function getWorkspaceConfigUri(folder: vscode.WorkspaceFolder): vscode.Uri {
   return vscode.Uri.joinPath(folder.uri, WORKSPACE_CONFIG_RELATIVE_PATH);
+}
+
+function readSettingsConfig(): EffectiveSettingsConfig {
+  const settings = vscode.workspace.getConfiguration('scalaLite');
+  const mode = settings.get<string>('mode');
+  const logLevel = settings.get<string>('logLevel');
+  const diagnosticsTrigger = settings.get<string>('diagnostics.trigger');
+
+  return {
+    mode: mode === 'A' || mode === 'B' || mode === 'C' ? mode : undefined,
+    logLevel: logLevel === 'DEBUG' || logLevel === 'INFO' || logLevel === 'WARN' || logLevel === 'ERROR'
+      ? logLevel
+      : undefined,
+    diagnosticsEnabled: settings.get<boolean>('diagnostics.enabled'),
+    diagnosticsTrigger: diagnosticsTrigger === 'onSave' || diagnosticsTrigger === 'onType'
+      ? diagnosticsTrigger
+      : undefined,
+    formatterFormatOnSave: settings.get<boolean>('formatter.formatOnSave')
+  };
 }
 
 async function readConfig(folder: vscode.WorkspaceFolder): Promise<ScalaLiteWorkspaceConfig> {
@@ -173,6 +206,9 @@ export function buildDefaultWorkspaceConfig(buildTool: BuildTool = 'sbt'): Scala
       useDocker: false,
       timeoutMs: 10000
     },
+    workspaceDoctor: {
+      autoRunOnOpen: false
+    },
     logLevel: 'INFO',
     testFrameworkHints: []
   };
@@ -217,6 +253,43 @@ export async function openOrCreateWorkspaceConfig(buildTool: BuildTool = 'sbt'):
   }
 }
 
+export async function createOrOverwriteWorkspaceConfig(
+  buildTool: BuildTool = 'sbt',
+  overwrite = false
+): Promise<{ readonly uri?: vscode.Uri; readonly exists: boolean; readonly written: boolean }> {
+  const folder = getPrimaryWorkspaceFolder();
+  if (!folder) {
+    return {
+      exists: false,
+      written: false
+    };
+  }
+
+  const configUri = getWorkspaceConfigUri(folder);
+  let exists: boolean;
+  try {
+    await vscode.workspace.fs.stat(configUri);
+    exists = true;
+  } catch {
+    exists = false;
+  }
+
+  if (exists && !overwrite) {
+    return {
+      uri: configUri,
+      exists,
+      written: false
+    };
+  }
+
+  await writeConfig(folder, buildDefaultWorkspaceConfig(buildTool));
+  return {
+    uri: configUri,
+    exists,
+    written: true
+  };
+}
+
 export async function readWorkspaceConfigRaw(): Promise<Record<string, unknown>> {
   const folder = getPrimaryWorkspaceFolder();
   if (!folder) {
@@ -228,9 +301,10 @@ export async function readWorkspaceConfigRaw(): Promise<Record<string, unknown>>
 }
 
 export async function readDefaultModeFromWorkspaceConfig(): Promise<WorkspaceMode | undefined> {
+  const settings = readSettingsConfig();
   const folder = getPrimaryWorkspaceFolder();
   if (!folder) {
-    return undefined;
+    return settings.mode;
   }
 
   const config = await readConfig(folder);
@@ -238,7 +312,7 @@ export async function readDefaultModeFromWorkspaceConfig(): Promise<WorkspaceMod
     return config.mode;
   }
 
-  return config.mode?.default;
+  return config.mode?.default ?? settings.mode;
 }
 
 export async function writeIndexedModuleFolderToWorkspaceConfig(relativePath: string): Promise<void> {
@@ -274,35 +348,43 @@ export async function readModuleFolderFromWorkspaceConfig(): Promise<string | un
 }
 
 export async function readLogLevelFromWorkspaceConfig(): Promise<ScalaLiteLogLevel | undefined> {
+  const settings = readSettingsConfig();
   const folder = getPrimaryWorkspaceFolder();
   if (!folder) {
-    return undefined;
+    return settings.logLevel;
   }
 
   const config = await readConfig(folder);
-  return config.logLevel;
+  return config.logLevel ?? settings.logLevel;
 }
 
 export async function readFormatterConfigFromWorkspaceConfig(): Promise<FormatterConfig> {
+  const settings = readSettingsConfig();
   const folder = getPrimaryWorkspaceFolder();
   if (!folder) {
-    return {};
+    return {
+      formatOnSave: settings.formatterFormatOnSave
+    };
   }
 
   const config = await readConfig(folder);
   const formatter = config.formatter ?? {};
   return {
     ...formatter,
-    path: formatter.path ?? formatter.scalafmtPath
+    path: formatter.path ?? formatter.scalafmtPath,
+    formatOnSave: formatter.formatOnSave ?? settings.formatterFormatOnSave
   };
 }
 
 export async function readDiagnosticsConfigFromWorkspaceConfig(): Promise<EffectiveDiagnosticsConfig> {
+  const settings = readSettingsConfig();
   const folder = getPrimaryWorkspaceFolder();
   if (!folder) {
     return {
-      enabled: true,
-      trigger: 'onSave'
+      enabled: typeof settings.diagnosticsEnabled === 'boolean'
+        ? settings.diagnosticsEnabled
+        : true,
+      trigger: settings.diagnosticsTrigger ?? 'onSave'
     };
   }
 
@@ -310,14 +392,29 @@ export async function readDiagnosticsConfigFromWorkspaceConfig(): Promise<Effect
   const diagnostics = config.diagnostics ?? {};
   const enabled = typeof diagnostics.enabled === 'boolean'
     ? diagnostics.enabled
-    : true;
+    : (typeof settings.diagnosticsEnabled === 'boolean' ? settings.diagnosticsEnabled : true);
   const trigger = diagnostics.trigger === 'onType' || diagnostics.trigger === 'onSave'
     ? diagnostics.trigger
-    : 'onSave';
+    : (settings.diagnosticsTrigger ?? 'onSave');
 
   return {
     enabled,
     trigger
+  };
+}
+
+export async function readWorkspaceDoctorConfigFromWorkspaceConfig(): Promise<Required<WorkspaceDoctorConfig>> {
+  const folder = getPrimaryWorkspaceFolder();
+  if (!folder) {
+    return {
+      autoRunOnOpen: false
+    };
+  }
+
+  const config = await readConfig(folder);
+  const workspaceDoctor = config.workspaceDoctor ?? {};
+  return {
+    autoRunOnOpen: workspaceDoctor.autoRunOnOpen === true
   };
 }
 

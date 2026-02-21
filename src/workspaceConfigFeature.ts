@@ -3,6 +3,7 @@ import { StructuredLogger } from './structuredLogger';
 import { ModeManager } from './modeManager';
 import { ProfileManager } from './profileManager';
 import {
+  createOrOverwriteWorkspaceConfig,
   getUnknownTopLevelWorkspaceConfigKeys,
   isWorkspaceConfigDocument,
   openOrCreateWorkspaceConfig,
@@ -13,6 +14,7 @@ import { validateIgnoreRulesAtActivation } from './ignoreRules';
 import { BuildTool } from './buildToolInference';
 
 export const COMMAND_OPEN_CONFIGURATION = 'scalaLite.openConfiguration';
+export const COMMAND_CREATE_CONFIGURATION = 'scalaLite.createConfiguration';
 
 interface WorkspaceConfigFeatureOptions {
   readonly logger: StructuredLogger;
@@ -65,7 +67,54 @@ export function registerWorkspaceConfigFeature(options: WorkspaceConfigFeatureOp
     }
   });
 
+  const createConfigDisposable = vscode.commands.registerCommand(COMMAND_CREATE_CONFIGURATION, async () => {
+    const createAttempt = await createOrOverwriteWorkspaceConfig(options.getDefaultBuildTool(), false);
+    if (!createAttempt.uri) {
+      return;
+    }
+
+    if (!createAttempt.written && createAttempt.exists) {
+      const action = await vscode.window.showWarningMessage(
+        vscode.l10n.t('.vscode/scala-lite.json already exists. Overwrite it with a fresh scaffold?'),
+        vscode.l10n.t('Overwrite'),
+        vscode.l10n.t('Cancel')
+      );
+
+      if (action !== vscode.l10n.t('Overwrite')) {
+        const existing = await vscode.workspace.openTextDocument(createAttempt.uri);
+        await vscode.window.showTextDocument(existing, { preview: false });
+        return;
+      }
+
+      const overwriteResult = await createOrOverwriteWorkspaceConfig(options.getDefaultBuildTool(), true);
+      if (!overwriteResult.written) {
+        return;
+      }
+    }
+
+    const document = await vscode.workspace.openTextDocument(createAttempt.uri);
+    const editor = await vscode.window.showTextDocument(document, { preview: false });
+    const firstKeyIndex = Math.max(0, document.getText().indexOf('"mode"'));
+    const firstPosition = document.positionAt(firstKeyIndex);
+    editor.selection = new vscode.Selection(firstPosition, firstPosition);
+    editor.revealRange(new vscode.Range(firstPosition, firstPosition));
+  });
+
+  const settingsWatcherDisposable = vscode.workspace.onDidChangeConfiguration(async (event) => {
+    if (!event.affectsConfiguration('scalaLite')) {
+      return;
+    }
+
+    try {
+      await reloadWorkspaceConfiguration(options);
+      vscode.window.setStatusBarMessage(vscode.l10n.t('Scala Lite settings reloaded.'), 2000);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      options.logger.warn('CONFIG', `Failed to reload settings from VS Code configuration: ${message}`);
+    }
+  });
+
   void reloadWorkspaceConfiguration(options);
 
-  return [openConfigDisposable, saveWatcherDisposable];
+  return [openConfigDisposable, createConfigDisposable, saveWatcherDisposable, settingsWatcherDisposable];
 }

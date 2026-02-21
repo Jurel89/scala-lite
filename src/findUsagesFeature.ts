@@ -70,6 +70,7 @@ async function pickScope(defaultScope: SearchScope, mode: WorkspaceMode): Promis
     options.push({
       label: vscode.l10n.t(scopeLabel(scope)),
       description: scope === defaultScope ? vscode.l10n.t('Default') : undefined,
+      picked: scope === defaultScope,
       scope
     });
   }
@@ -194,6 +195,7 @@ export class FindUsagesProvider implements vscode.ReferenceProvider {
       }
     }
 
+    // Primary message with symbol and scope context (FR-0022)
     vscode.window.setStatusBarMessage(
       vscode.l10n.t('Textual references for {0} (scope: {1})', symbol, scopeLabel(selectedScope)),
       3500

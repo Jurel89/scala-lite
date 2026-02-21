@@ -73,12 +73,14 @@ export class GoToDefinitionProvider implements vscode.DefinitionProvider {
     const tier2 = await this.findIndexedDefinition(document, symbolName, token);
     if (tier2) {
       this.showBadge(vscode.l10n.t('📍 Likely'));
+      vscode.window.setStatusBarMessage(vscode.l10n.t('Indexed'), 3000);
       return tier2;
     }
 
     const tier3 = await this.findTextSearchDefinition(document, symbolName, token);
     if (tier3) {
       this.showBadge(vscode.l10n.t('🔍 Text Search'));
+      vscode.window.setStatusBarMessage(vscode.l10n.t('≈ Text search'), 3000);
       return tier3;
     }
 

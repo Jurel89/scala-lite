@@ -25,7 +25,12 @@ import { registerScalafixFeature } from './scalafixFeature';
 import { validateIgnoreRulesAtActivation } from './ignoreRules';
 import { registerWorkspaceConfigFeature } from './workspaceConfigFeature';
 import { registerWorkspaceDoctorFeature } from './workspaceDoctorFeature';
-import { getNativeEngine, initializeNativeEngine, registerNativeEngineFeature } from './nativeEngineState';
+import {
+  getNativeEngine,
+  getNativeEngineStatus,
+  initializeNativeEngine,
+  registerNativeEngineFeature
+} from './nativeEngineState';
 import {
   ACTIVATION_BUDGET_MS,
   recordActivationDuration,
@@ -214,7 +219,8 @@ export function activate(context: vscode.ExtensionContext): void {
     },
     definitionProvider,
     workspaceSymbolProvider,
-    referenceProvider
+    referenceProvider,
+    getNativeEngineStatusLabel: () => getNativeEngineStatus()
   });
 
   const runIdleAuditDisposable = vscode.commands.registerCommand('scalaLite.runIdleCpuAudit', async () => {
@@ -269,7 +275,10 @@ export function activate(context: vscode.ExtensionContext): void {
     profileManager,
     getDefaultBuildTool: getPrimaryDetectedBuildTool
   });
+  // GUARDRAIL: Workspace Doctor MUST NOT run on activation by default.
+  // It stays user-triggered unless workspaceDoctor.autoRunOnOpen is explicitly enabled.
   const workspaceDoctorDisposables = registerWorkspaceDoctorFeature({
+    logger,
     getBuildTool: getPrimaryDetectedBuildTool,
     getPrioritizedFolderRoots: () => {
       const symbolCountsByFolder = new Map<string, number>();
@@ -330,6 +339,7 @@ export function activate(context: vscode.ExtensionContext): void {
     await detectWorkspaceBuildTools(buildToolDetectionSession, buildToolState, logger, false);
     await profileManager.initialize();
   })();
+
   void modeManager.initialize();
   void syntaxDiagnosticsController.refreshOpenDocuments();
   const activationElapsed = Date.now() - activationStartedAt;

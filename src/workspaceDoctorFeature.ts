@@ -3,6 +3,8 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { BuildTool } from './buildToolInference';
 import { defaultScalafmtConfContent } from './scalafmtCore';
+import { readWorkspaceDoctorConfigFromWorkspaceConfig } from './workspaceConfig';
+import { StructuredLogger } from './structuredLogger';
 
 export const COMMAND_WORKSPACE_DOCTOR = 'scalaLite.runWorkspaceDoctor';
 
@@ -29,6 +31,7 @@ interface WorkspaceDoctorFeatureOptions {
   readonly getBuildTool: () => BuildTool;
   readonly getPrioritizedFolderRoots?: () => readonly string[];
   readonly onPrioritizationApplied?: (prioritizedFolderCount: number, totalFolderCount: number) => void;
+  readonly logger?: StructuredLogger;
 }
 
 interface FolderFacts {
@@ -501,5 +504,37 @@ export function registerWorkspaceDoctorFeature(options: WorkspaceDoctorFeatureOp
     );
   });
 
-  return [command];
+  let autoRunTimeoutId: NodeJS.Timeout | undefined;
+
+  const autoRunDisposable = new vscode.Disposable(() => {
+    if (autoRunTimeoutId !== undefined) {
+      clearTimeout(autoRunTimeoutId);
+      autoRunTimeoutId = undefined;
+    }
+  });
+
+  void (async () => {
+    const workspaceDoctorConfig = await readWorkspaceDoctorConfigFromWorkspaceConfig();
+    if (!workspaceDoctorConfig.autoRunOnOpen) {
+      return;
+    }
+
+    autoRunTimeoutId = setTimeout(async () => {
+      try {
+        const sample = await vscode.workspace.findFiles('**/*', undefined, 10_001);
+        if (sample.length > 10_000) {
+          options.logger?.info('DIAG', 'Workspace Doctor auto-run skipped: workspace exceeds 10,000 files.');
+          return;
+        }
+
+        options.logger?.info('DIAG', 'Workspace Doctor auto-run started from workspace configuration.');
+        await vscode.commands.executeCommand(COMMAND_WORKSPACE_DOCTOR);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        options.logger?.warn('DIAG', `Workspace Doctor auto-run failed. ${message}`);
+      }
+    }, 30_000);
+  })();
+
+  return [command, autoRunDisposable];
 }

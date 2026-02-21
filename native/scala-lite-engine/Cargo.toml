@@ -3,7 +3,7 @@ name = "scala-lite-engine"
 version = "0.1.0"
 edition = "2021"
 description = "Rust-native indexing engine for Scala Lite"
-license = "UNLICENSED"
+license = "MIT"
 keywords = ["scala", "indexing", "vscode", "napi"]
 categories = ["text-processing", "development-tools"]
 

@@ -9,8 +9,10 @@ function readSource(relativePath: string): string {
 }
 
 test('IN-0007: package.json defines napi targets and native build scripts', () => {
-  const packageJson = JSON.parse(readSource('package.json')) as {
+  const rootPackageJson = JSON.parse(readSource('package.json')) as {
     scripts: Record<string, string>;
+  };
+  const nativePackageJson = JSON.parse(readSource('native/scala-lite-engine/package.json')) as {
     napi: {
       name: string;
       triples: {
@@ -20,10 +22,10 @@ test('IN-0007: package.json defines napi targets and native build scripts', () =
     };
   };
 
-  assert.equal(typeof packageJson.scripts['native:build:napi'], 'string');
-  assert.equal(packageJson.napi.name, 'scala-lite-engine');
-  assert.equal(packageJson.napi.triples.defaults, false);
-  assert.deepEqual(packageJson.napi.triples.additional, [
+  assert.equal(typeof rootPackageJson.scripts['native:build:napi'], 'string');
+  assert.equal(nativePackageJson.napi.name, 'scala-lite-engine');
+  assert.equal(nativePackageJson.napi.triples.defaults, false);
+  assert.deepEqual(nativePackageJson.napi.triples.additional, [
     'x86_64-unknown-linux-gnu',
     'x86_64-apple-darwin',
     'aarch64-apple-darwin',
@@ -68,6 +70,7 @@ test('TC-0005: vscodeignore keeps compiled native bindings and excludes Rust sou
   assert.equal(vscodeIgnore.includes('!native/scala-lite-engine/bindings/*.node'), true);
   assert.equal(vscodeIgnore.includes('native/scala-lite-engine/src/**'), true);
   assert.equal(vscodeIgnore.includes('native/scala-lite-engine/target/**'), true);
+  assert.equal(vscodeIgnore.includes('native/scala-lite-engine/package.json'), true);
   assert.equal(vscodeIgnore.includes('native/scala-lite-engine/Cargo.toml'), true);
   assert.equal(vscodeIgnore.includes('native/scala-lite-engine/Cargo.lock'), true);
 });

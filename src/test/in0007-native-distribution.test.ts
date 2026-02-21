@@ -43,7 +43,7 @@ test('IN-0007: native-build workflow uses on-demand triggers and 4-platform matr
   assert.equal(workflow.includes('aarch64-apple-darwin'), true);
   assert.equal(workflow.includes('x86_64-pc-windows-msvc'), true);
 
-  assert.equal(workflow.includes('npx napi build --platform --release --cargo-cwd native/scala-lite-engine --features napi'), true);
+  assert.equal(workflow.includes('(cd native/scala-lite-engine && npx napi build --platform --release --features napi)'), true);
   assert.equal(workflow.includes('actions/upload-artifact@v4'), true);
   assert.equal(workflow.includes('name: native-${{ matrix.target }}'), true);
 });

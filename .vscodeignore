@@ -18,6 +18,9 @@ docs/**
 native/scala-lite-engine/src/**
 native/scala-lite-engine/tests/**
 native/scala-lite-engine/target/**
+native/scala-lite-engine/package.json
+native/scala-lite-engine/Cargo.toml
+native/scala-lite-engine/Cargo.lock
 native/scala-lite-engine/Cargo.toml
 native/scala-lite-engine/Cargo.lock
 native/scala-lite-engine/**/*.rs

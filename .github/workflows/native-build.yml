@@ -51,7 +51,7 @@ jobs:
           mkdir -p native/scala-lite-engine/bindings
           find native/scala-lite-engine -maxdepth 5 -type f -name '*.node' -delete
 
-          npx napi build --platform --release --manifest-path native/scala-lite-engine/Cargo.toml --features napi
+          npx napi build --platform --release --cargo-cwd native/scala-lite-engine --features napi
 
           RAW_NODE_FILE=$(find native/scala-lite-engine -maxdepth 5 -type f -name '*.node' | head -n 1)
           if [ -z "${RAW_NODE_FILE}" ]; then

@@ -20,7 +20,6 @@ test('TC-0007: shared compareSymbols defines deterministic base ordering', () =>
 
 test('TC-0007: compareSymbols supports custom primary criteria and cursor proximity variant', () => {
   const source = readSource('src/symbolSort.ts');
-  const gtdSource = readSource('src/goToDefinitionFeature.ts');
   const rustSource = readSource('native/scala-lite-engine/src/lib.rs');
   const workspaceSource = readSource('src/workspaceSymbolFeature.ts');
 

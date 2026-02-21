@@ -352,7 +352,11 @@ fn tokenize_imports(file_path: &str, content: &str) -> Vec<ImportEntry> {
             close_braces += next_line.matches('}').count();
         }
 
-        records.extend(parse_import_statement(file_path, &statement, (index + 1) as u32));
+        records.extend(parse_import_statement(
+            file_path,
+            &statement,
+            (index + 1) as u32,
+        ));
         index = cursor + 1;
     }
 
@@ -498,7 +502,10 @@ pub fn index_files(files: &[FileInput]) -> Result<IndexSnapshot, EngineError> {
             .iter()
             .find(|entry| entry.kind == "package")
         {
-            package_by_file.insert(file_result.file_path.clone(), package_symbol.package_name.clone());
+            package_by_file.insert(
+                file_result.file_path.clone(),
+                package_symbol.package_name.clone(),
+            );
         }
 
         for symbol in file_result.symbols {
@@ -588,12 +595,7 @@ pub fn query_symbols(
         })
         .collect();
 
-    ranked_buckets.sort_by(|left, right| {
-        right
-            .0
-            .cmp(&left.0)
-            .then_with(|| left.1.cmp(&right.1))
-    });
+    ranked_buckets.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
 
     Ok(ranked_buckets
         .into_iter()
@@ -603,8 +605,7 @@ pub fn query_symbols(
 }
 
 fn compare_symbol_entries(left: &SymbolEntry, right: &SymbolEntry) -> std::cmp::Ordering {
-    left
-        .file_path
+    left.file_path
         .cmp(&right.file_path)
         .then_with(|| left.line_number.cmp(&right.line_number))
         .then_with(|| symbol_kind_rank(&left.kind).cmp(&symbol_kind_rank(&right.kind)))

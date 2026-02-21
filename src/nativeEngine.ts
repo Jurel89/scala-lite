@@ -218,14 +218,36 @@ class TypeScriptFallbackEngine {
   }
 
   public querySymbolsInPackage(query: string, packagePath: string, limit: number): readonly IndexedSymbol[] {
-    if (!query.trim() || !packagePath.trim()) {
+    const trimmedQuery = query.trim();
+    const trimmedPackagePath = packagePath.trim();
+    if (!trimmedQuery || !trimmedPackagePath) {
       return [];
     }
 
-    return this.querySymbols(query, Math.max(1, limit)).filter((entry) => entry.packageName === packagePath);
+    const cappedLimit = Math.max(1, Math.floor(limit));
+    const exactBucket = this.symbolsByName.get(trimmedQuery);
+    if (!exactBucket || exactBucket.length === 0) {
+      return [];
+    }
+
+    return exactBucket
+      .filter((entry) => entry.packageName === trimmedPackagePath)
+      .sort((left, right) => compareSymbols(left, right))
+      .slice(0, cappedLimit);
   }
 
-  public queryPackageExists(_packagePath: string): boolean {
+  public queryPackageExists(packagePath: string): boolean {
+    const trimmedPath = packagePath.trim();
+    if (!trimmedPath) {
+      return false;
+    }
+
+    for (const symbols of this.symbolsByName.values()) {
+      if (symbols.some((symbol) => symbol.packageName === trimmedPath)) {
+        return true;
+      }
+    }
+
     return false;
   }
 

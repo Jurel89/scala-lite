@@ -4,9 +4,13 @@ export const vscodeMock = {
   Location: class Location {
     public range: any;
     constructor(public uri: any, public rangeOrPosition: any) {
-      this.range = rangeOrPosition;
-      if (this.range && !this.range.start) {
-        this.range.start = rangeOrPosition;
+      if (rangeOrPosition && typeof rangeOrPosition.line === 'number' && typeof rangeOrPosition.character === 'number') {
+        this.range = {
+          start: rangeOrPosition,
+          end: rangeOrPosition
+        };
+      } else {
+        this.range = rangeOrPosition;
       }
     }
   },
@@ -26,8 +30,10 @@ export const vscodeMock = {
   },
   MarkdownString: class MarkdownString {
     public value: string;
+    public isTrusted: boolean;
     constructor(value?: string) {
       this.value = value ?? '';
+      this.isTrusted = false;
     }
     appendMarkdown(text: string): void {
       this.value += text;

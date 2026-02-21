@@ -59,10 +59,6 @@ function shouldStopAtTopLevelDeclaration(lineText: string): boolean {
   return /^(package\s+|import\s+|object\s+|class\s+|trait\s+|enum\s+|def\s+|val\s+|var\s+|type\s+)/.test(trimmed);
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 function symbolKindCodicon(kind: IndexedSymbol['symbolKind']): string {
   if (kind === 'class') {
     return '$(symbol-class)';
@@ -301,6 +297,7 @@ export class HoverInfoProvider implements vscode.HoverProvider {
     token: vscode.CancellationToken
   ): Promise<vscode.Hover> {
     const markdown = new vscode.MarkdownString(undefined, true);
+    markdown.isTrusted = true;
     markdown.appendMarkdown(`### ${symbolName} — ${vscode.l10n.t('ambiguous ({0} matches)', String(resolved.candidates.length))}\n\n`);
     markdown.appendMarkdown(`${vscode.l10n.t('Top candidates:')}\n`);
 

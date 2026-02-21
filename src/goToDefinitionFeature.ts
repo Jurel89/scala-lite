@@ -474,8 +474,15 @@ export class GoToDefinitionProvider implements vscode.DefinitionProvider {
 
     const stageF = await this.resolveStageFTextSearch(document, originSnapshot, token);
     this.traceStage(stageF, originSnapshot);
-    if (stageF.candidates.length === 1) {
-      return this.toSingleResolution(originSnapshot, stageF.candidates[0], 'low', 'text', stageF.stage, 'stage-F-text');
+    if (stageF.candidates.length > 0) {
+      return {
+        kind: 'multiple',
+        symbolName: originSnapshot.tokenText,
+        candidates: stageF.candidates,
+        confidence: stageF.confidence,
+        stage: stageF.stage,
+        reason: 'stage-F-text'
+      };
     }
 
     return {
@@ -979,7 +986,7 @@ export class GoToDefinitionProvider implements vscode.DefinitionProvider {
   ): Promise<IndexedSymbol | undefined> {
     const sortedCandidates = [...candidates].sort(
       stage === 'A' || stage === 'B'
-        ? compareSymbolsWithCursorProximity(originSnapshot.originLine)
+        ? compareSymbolsWithCursorProximity(originSnapshot.originLine + 1)
         : (left, right) => compareSymbols(left, right)
     );
     const reason = stageReasonBadge(stage);

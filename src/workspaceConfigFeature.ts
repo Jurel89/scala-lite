@@ -86,7 +86,10 @@ export function registerWorkspaceConfigFeature(options: WorkspaceConfigFeatureOp
         return;
       }
 
-      await createOrOverwriteWorkspaceConfig(options.getDefaultBuildTool(), true);
+      const overwriteResult = await createOrOverwriteWorkspaceConfig(options.getDefaultBuildTool(), true);
+      if (!overwriteResult.written) {
+        return;
+      }
     }
 
     const document = await vscode.workspace.openTextDocument(createAttempt.uri);

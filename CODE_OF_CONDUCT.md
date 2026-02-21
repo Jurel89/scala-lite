@@ -59,7 +59,7 @@ representative at an online or offline event.
 ### Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the maintainers at: security@scala-lite.dev.
+reported to the maintainers using the process described in `SECURITY.md`.
 
 All complaints will be reviewed and investigated promptly and fairly.
 

@@ -504,13 +504,22 @@ export function registerWorkspaceDoctorFeature(options: WorkspaceDoctorFeatureOp
     );
   });
 
+  let autoRunTimeoutId: NodeJS.Timeout | undefined;
+
+  const autoRunDisposable = new vscode.Disposable(() => {
+    if (autoRunTimeoutId !== undefined) {
+      clearTimeout(autoRunTimeoutId);
+      autoRunTimeoutId = undefined;
+    }
+  });
+
   void (async () => {
     const workspaceDoctorConfig = await readWorkspaceDoctorConfigFromWorkspaceConfig();
     if (!workspaceDoctorConfig.autoRunOnOpen) {
       return;
     }
 
-    setTimeout(async () => {
+    autoRunTimeoutId = setTimeout(async () => {
       try {
         const sample = await vscode.workspace.findFiles('**/*', undefined, 10_001);
         if (sample.length > 10_000) {
@@ -527,5 +536,5 @@ export function registerWorkspaceDoctorFeature(options: WorkspaceDoctorFeatureOp
     }, 30_000);
   })();
 
-  return [command];
+  return [command, autoRunDisposable];
 }

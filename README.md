@@ -59,6 +59,8 @@ All commands live under the **Scala Lite** category:
 - Scala Lite: Run Test Suite / Run Test Case
 - Scala Lite: Rebuild Index
 - Scala Lite: Workspace Doctor
+- Scala Lite: Open Configuration
+- Scala Lite: Create Configuration
 - Scala Lite: Restart Native Engine
 - Scala Lite: Run Activation Audit
 - Scala Lite: Run Memory Budget Audit

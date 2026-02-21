@@ -10,9 +10,9 @@ Security fixes are prioritized for the latest release and the `main` branch.
 
 Please do **not** open public GitHub issues for security vulnerabilities.
 
-Instead, report privately by emailing:
+Instead, report privately using GitHub's security reporting tools:
 
-- security@scala-lite.dev
+- Use the **"Report a vulnerability"** option in this repository's **Security** tab (GitHub Security Advisories).
 
 Please include:
 

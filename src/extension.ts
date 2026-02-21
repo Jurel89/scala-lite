@@ -17,6 +17,7 @@ import {
 } from './runTestFeature';
 import { BuildDiagnosticsRunner } from './buildDiagnostics';
 import { readLogLevelFromWorkspaceConfig } from './workspaceConfig';
+import { getWorkspaceConfigSourceLabel } from './workspaceConfig';
 import { StructuredLogger } from './structuredLogger';
 import { createDiagnosticBundle } from './diagnosticBundle';
 import { ProfileManager } from './profileManager';
@@ -220,7 +221,8 @@ export function activate(context: vscode.ExtensionContext): void {
     definitionProvider,
     workspaceSymbolProvider,
     referenceProvider,
-    getNativeEngineStatusLabel: () => getNativeEngineStatus()
+    getNativeEngineStatusLabel: () => getNativeEngineStatus(),
+    getConfigSourceLabel: () => getWorkspaceConfigSourceLabel()
   });
 
   const runIdleAuditDisposable = vscode.commands.registerCommand('scalaLite.runIdleCpuAudit', async () => {

@@ -6,6 +6,7 @@ import { SymbolIndexManager } from './symbolIndex';
 import { resolveWorkspaceIgnoreRules } from './ignoreRules';
 import { readBudgetConfigFromWorkspaceConfig } from './workspaceConfig';
 import { StructuredLogger } from './structuredLogger';
+import { formatResultBadge } from './resultBadges';
 
 function parsePackageName(document: vscode.TextDocument): string {
   for (let index = 0; index < Math.min(document.lineCount, 80); index += 1) {
@@ -59,13 +60,16 @@ export class GoToDefinitionProvider implements vscode.DefinitionProvider {
       return [];
     }
 
+    const mode = this.getMode();
+
     const tier1 = this.findSameFileDefinition(document, symbolName, position.line);
     if (tier1) {
       this.showBadge(vscode.l10n.t('Exact'));
+      const tier1Source = mode === 'A' ? 'text' : 'indexed';
+      vscode.window.setStatusBarMessage(`${formatResultBadge(tier1Source)} ${vscode.l10n.t('Exact')}`, 3000);
       return tier1;
     }
 
-    const mode = this.getMode();
     if (mode === 'A') {
       return [];
     }
@@ -73,14 +77,14 @@ export class GoToDefinitionProvider implements vscode.DefinitionProvider {
     const tier2 = await this.findIndexedDefinition(document, symbolName, token);
     if (tier2) {
       this.showBadge(vscode.l10n.t('📍 Likely'));
-      vscode.window.setStatusBarMessage(vscode.l10n.t('Indexed'), 3000);
+      vscode.window.setStatusBarMessage(`${formatResultBadge('indexed')} ${vscode.l10n.t('Indexed')}`, 3000);
       return tier2;
     }
 
     const tier3 = await this.findTextSearchDefinition(document, symbolName, token);
     if (tier3) {
       this.showBadge(vscode.l10n.t('🔍 Text Search'));
-      vscode.window.setStatusBarMessage(vscode.l10n.t('≈ Text search'), 3000);
+      vscode.window.setStatusBarMessage(`${formatResultBadge('text')} ${vscode.l10n.t('Text Search')}`, 3000);
       return tier3;
     }
 

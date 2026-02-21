@@ -9,7 +9,11 @@ permissions:
   contents: write
 
 jobs:
+  build-native:
+    uses: ./.github/workflows/native-build.yml
+
   build-and-release:
+    needs: build-native
     runs-on: ubuntu-latest
 
     steps:
@@ -28,6 +32,21 @@ jobs:
 
       - run: npm test
 
+      - name: Download native binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          merge-multiple: true
+          path: native/scala-lite-engine/bindings
+
+      - name: Verify native binaries before packaging
+        run: |
+          ls -lh native/scala-lite-engine/bindings
+          test -f native/scala-lite-engine/bindings/scala-lite-engine.linux-x64.node
+          test -f native/scala-lite-engine/bindings/scala-lite-engine.darwin-x64.node
+          test -f native/scala-lite-engine/bindings/scala-lite-engine.darwin-arm64.node
+          test -f native/scala-lite-engine/bindings/scala-lite-engine.win32-x64.node
+
       - name: Package VSIX
         run: npx @vscode/vsce package --no-dependencies
 
@@ -43,6 +62,18 @@ jobs:
           ACTUAL_VSIX=$(ls -1 *.vsix | head -n 1)
           mv "$ACTUAL_VSIX" "${{ steps.meta.outputs.vsix }}"
 
+      - name: Log VSIX size and bundled native files
+        run: |
+          ls -lh "${{ steps.meta.outputs.vsix }}"
+          unzip -l "${{ steps.meta.outputs.vsix }}" | grep 'native/scala-lite-engine/bindings/.*\.node' || true
+
+          VSIX_SIZE_BYTES=$(wc -c < "${{ steps.meta.outputs.vsix }}")
+          VSIX_SIZE_MB=$((VSIX_SIZE_BYTES / 1024 / 1024))
+          if [ "$VSIX_SIZE_MB" -gt 15 ]; then
+            echo "VSIX size budget exceeded: ${VSIX_SIZE_MB}MB (limit: 15MB)."
+            exit 1
+          fi
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.meta.outputs.vsix }}
@@ -50,6 +81,9 @@ jobs:
 
       - name: Build release notes from CHANGELOG
         run: |
+          # Release notes are extracted from the current [Unreleased] section.
+          # After each release, maintainers should move these entries into a
+          # versioned header in CHANGELOG.md (manual step until automated).
           awk '
             /^## \[Unreleased\]/ { in_section=1; next }
             /^## \[/ { if (in_section) exit }

@@ -24,7 +24,8 @@ test('FR-0022: Workspace symbol results include module prefix in Mode C', () => 
   const source = readSource('src/workspaceSymbolFeature.ts');
   assert.equal(source.includes("const modulePrefix = mode === 'C'"), true);
   assert.equal(source.includes('resolveModulePrefix'), true);
-  assert.equal(source.includes('`${modulePrefix}: ${symbol.symbolName}`'), true);
+  assert.equal(source.includes('modulePrefix ?'), true);
+  assert.equal(source.includes('`${badge} ${modulePrefix}: ${symbol.symbolName}`'), true);
 });
 
 test('FR-0022: honesty labels are localized in bundle', () => {

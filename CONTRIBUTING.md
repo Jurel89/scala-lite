@@ -40,6 +40,15 @@ Common commands:
   - `npm test`
   - (If relevant) `npm run native:test`
 
+## Changelog
+
+- If your PR changes user-visible behavior, add an entry under `## [Unreleased]` in `CHANGELOG.md`.
+- Use Keep a Changelog categories: `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`.
+- Entry format should be one line:
+  - `- Brief description (#123)`
+  - `- Brief description (FR-0032)`
+- Internal-only refactors, CI-only changes, and test-only changes usually do not need changelog entries.
+
 ## Reporting Bugs
 
 If you’re reporting a bug or performance issue, please run:

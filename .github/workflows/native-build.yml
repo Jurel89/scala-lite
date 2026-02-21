@@ -1,0 +1,70 @@
+name: native-build
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  build-native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            suffix: linux-x64
+          - runner: macos-13
+            target: x86_64-apple-darwin
+            suffix: darwin-x64
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            suffix: darwin-arm64
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            suffix: win32-x64
+
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Build native addon
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf native/scala-lite-engine/bindings
+          mkdir -p native/scala-lite-engine/bindings
+          find native/scala-lite-engine -maxdepth 5 -type f -name '*.node' -delete
+
+          npx napi build --platform --release --manifest-path native/scala-lite-engine/Cargo.toml --features napi
+
+          RAW_NODE_FILE=$(find native/scala-lite-engine -maxdepth 5 -type f -name '*.node' | head -n 1)
+          if [ -z "${RAW_NODE_FILE}" ]; then
+            echo "No .node artifact produced by napi build."
+            exit 1
+          fi
+
+          DESTINATION="native/scala-lite-engine/bindings/scala-lite-engine.${{ matrix.suffix }}.node"
+          cp "${RAW_NODE_FILE}" "${DESTINATION}"
+          ls -lh "${DESTINATION}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.target }}
+          path: native/scala-lite-engine/bindings/scala-lite-engine.${{ matrix.suffix }}.node
+          if-no-files-found: error

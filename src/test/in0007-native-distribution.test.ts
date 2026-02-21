@@ -14,18 +14,14 @@ test('IN-0007: package.json defines napi targets and native build scripts', () =
   };
   const nativePackageJson = JSON.parse(readSource('native/scala-lite-engine/package.json')) as {
     napi: {
-      name: string;
-      triples: {
-        defaults: boolean;
-        additional: string[];
-      };
+      binaryName: string;
+      targets: string[];
     };
   };
 
   assert.equal(typeof rootPackageJson.scripts['native:build:napi'], 'string');
-  assert.equal(nativePackageJson.napi.name, 'scala-lite-engine');
-  assert.equal(nativePackageJson.napi.triples.defaults, false);
-  assert.deepEqual(nativePackageJson.napi.triples.additional, [
+  assert.equal(nativePackageJson.napi.binaryName, 'scala-lite-engine');
+  assert.deepEqual(nativePackageJson.napi.targets, [
     'x86_64-unknown-linux-gnu',
     'x86_64-apple-darwin',
     'aarch64-apple-darwin',

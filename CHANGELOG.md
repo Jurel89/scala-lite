@@ -15,6 +15,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - README upgraded to Marketplace-ready product documentation structure.
 
+### Deprecated
+
+### Removed
+
 ### Fixed
 
 - Pending CI/workflow and packaging fixes tracked via open issues.
+
+### Security

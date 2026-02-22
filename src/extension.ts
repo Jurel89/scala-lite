@@ -52,7 +52,7 @@ import { WorkspaceSymbolSearchProvider } from './workspaceSymbolFeature';
 import { FindUsagesProvider } from './findUsagesFeature';
 import { SyntaxDiagnosticsController } from './syntaxDiagnosticsFeature';
 import { HoverInfoProvider } from './hoverInfoFeature';
-import { ensureScalaLiteCacheDir, getScalaLiteCacheSummary, resetScalaLiteCache } from './scalaLiteCache';
+import { ensureScalaLiteCacheDir, getScalaLiteCacheSummary, hasDependencyIndexCache, resetScalaLiteCache } from './scalaLiteCache';
 import { fetchDependencyArtifacts, readDependencyAttachmentSummary } from './dependencyArtifacts';
 import { resolveJdkModules } from './jdkResolver';
 import {
@@ -69,6 +69,7 @@ const COMMAND_DEPENDENCY_STATUS = 'scalaLite.dependencyStatus';
 const COMMAND_DEPENDENCY_JDK_STATUS = 'scalaLite.dependencyJdkStatus';
 const COMMAND_RESET_DEPENDENCY_CACHE = 'scalaLite.resetDependencyCache';
 const COMMAND_OPEN_DEPENDENCY_ATTACHMENT = 'scalaLite.openDependencyAttachment';
+const DEPENDENCY_SYNC_BANNER_DISMISSED_KEY = 'scalaLite.deps.syncBanner.dismissed';
 
 const IDLE_AUDIT_DURATION_MS = 30_000;
 const MODE_C_BUDGET_AUDIT_INTERVAL_MS = 60_000;
@@ -143,6 +144,64 @@ async function onModeChanged(
   await detectWorkspaceBuildTools(detectionSession, buildToolState, logger, false);
 }
 
+function getDependencyWorkspaceFolderCandidates(): readonly vscode.WorkspaceFolder[] {
+  const folders = vscode.workspace.workspaceFolders ?? [];
+  if (folders.length <= 1) {
+    return folders;
+  }
+
+  const activeUri = vscode.window.activeTextEditor?.document.uri;
+  const activeFolder = activeUri ? vscode.workspace.getWorkspaceFolder(activeUri) : undefined;
+  if (!activeFolder) {
+    return folders;
+  }
+
+  return [
+    activeFolder,
+    ...folders.filter((folder) => folder.uri.toString() !== activeFolder.uri.toString())
+  ];
+}
+
+function normalizeWorkspaceFolderUri(value: unknown): vscode.Uri | undefined {
+  if (value instanceof vscode.Uri) {
+    return value;
+  }
+
+  if (typeof value === 'string' && value.trim().length > 0) {
+    try {
+      return vscode.Uri.parse(value);
+    } catch {
+      return undefined;
+    }
+  }
+
+  if (value && typeof value === 'object') {
+    const candidate = value as {
+      readonly scheme?: unknown;
+      readonly authority?: unknown;
+      readonly path?: unknown;
+      readonly query?: unknown;
+      readonly fragment?: unknown;
+    };
+
+    if (typeof candidate.scheme === 'string' && typeof candidate.path === 'string') {
+      try {
+        return vscode.Uri.from({
+          scheme: candidate.scheme,
+          authority: typeof candidate.authority === 'string' ? candidate.authority : '',
+          path: candidate.path,
+          query: typeof candidate.query === 'string' ? candidate.query : '',
+          fragment: typeof candidate.fragment === 'string' ? candidate.fragment : ''
+        });
+      } catch {
+        return undefined;
+      }
+    }
+  }
+
+  return undefined;
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   const activationStartedAt = Date.now();
   const logger = new StructuredLogger('INFO');
@@ -160,6 +219,74 @@ export function activate(context: vscode.ExtensionContext): void {
   const buildToolState = new Map<string, BuildTool>();
   let buildIntegrationEnabled = true;
   let activeMode: WorkspaceMode = 'A';
+  let dependencySyncBannerShownInSession = false;
+  let dependencySyncBannerInProgress = false;
+
+  const maybeShowFirstTimeDependencySyncBanner = async (): Promise<void> => {
+    if (activeMode !== 'C' || dependencySyncBannerShownInSession || dependencySyncBannerInProgress) {
+      return;
+    }
+
+    const candidateFolders = getDependencyWorkspaceFolderCandidates();
+    if (candidateFolders.length === 0) {
+      return;
+    }
+
+    if (context.workspaceState.get<boolean>(DEPENDENCY_SYNC_BANNER_DISMISSED_KEY) === true) {
+      return;
+    }
+
+    const dependencyConfig = await readDependencyConfigFromWorkspaceConfig();
+    if (!dependencyConfig.enabled) {
+      return;
+    }
+
+    const buildConfig = await readBuildConfigFromWorkspaceConfig();
+    let folderToSync: vscode.WorkspaceFolder | undefined;
+    for (const folder of candidateFolders) {
+      if (await hasDependencyIndexCache(folder)) {
+        continue;
+      }
+
+      const providerResult = await detectClasspathProvider(folder, { preferred: buildConfig.classpathProvider });
+      if (providerResult.provider === 'none') {
+        continue;
+      }
+
+      folderToSync = folder;
+      break;
+    }
+
+    if (!folderToSync) {
+      return;
+    }
+
+    dependencySyncBannerInProgress = true;
+    try {
+      const syncAction = vscode.l10n.t('Sync Classpath');
+      const notNowAction = vscode.l10n.t('Not Now');
+      const dontAskAgainAction = vscode.l10n.t("Don't Ask Again");
+
+      const picked = await vscode.window.showInformationMessage(
+        vscode.l10n.t('Dependency navigation available. Sync classpath to enable go-to-definition for libraries.'),
+        syncAction,
+        notNowAction,
+        dontAskAgainAction
+      );
+
+      dependencySyncBannerShownInSession = true;
+      if (picked === dontAskAgainAction) {
+        await context.workspaceState.update(DEPENDENCY_SYNC_BANNER_DISMISSED_KEY, true);
+        return;
+      }
+
+      if (picked === syncAction) {
+        await vscode.commands.executeCommand(COMMAND_SYNC_CLASSPATH, folderToSync.uri);
+      }
+    } finally {
+      dependencySyncBannerInProgress = false;
+    }
+  };
 
   const getBuildToolForUri = (uri: vscode.Uri): BuildTool => {
     if (!buildIntegrationEnabled) {
@@ -299,6 +426,7 @@ export function activate(context: vscode.ExtensionContext): void {
       await onModeChanged(mode, buildToolDetectionSession, buildToolState, logger, symbolIndexManager);
       configureModeCBudgetAuditTimer();
       await syntaxDiagnosticsController.refreshOpenDocuments();
+      await maybeShowFirstTimeDependencySyncBanner();
     },
     getBuildIntegrationLabel: () => getPrimaryDetectedBuildTool(),
     onBuildIntegrationChanged: async (enabled) => {
@@ -310,6 +438,7 @@ export function activate(context: vscode.ExtensionContext): void {
       }
 
       await detectWorkspaceBuildTools(buildToolDetectionSession, buildToolState, logger, false);
+      await maybeShowFirstTimeDependencySyncBanner();
     },
     registerAdditionalProvidersForMode: (mode) => {
       if (mode === 'A') {
@@ -357,13 +486,16 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.showInformationMessage(vscode.l10n.t('Build tool re-detection completed.'));
   });
 
-  const syncClasspathDisposable = vscode.commands.registerCommand(COMMAND_SYNC_CLASSPATH, async () => {
+  const syncClasspathDisposable = vscode.commands.registerCommand(COMMAND_SYNC_CLASSPATH, async (targetFolderUriArg?: unknown) => {
     if (activeMode !== 'C') {
       vscode.window.showWarningMessage(vscode.l10n.t('Switch to Mode C to enable dependency indexing.'));
       return;
     }
 
-    const folder = vscode.workspace.workspaceFolders?.[0];
+    const targetFolderUri = normalizeWorkspaceFolderUri(targetFolderUriArg);
+    const folder = targetFolderUri
+      ? vscode.workspace.getWorkspaceFolder(targetFolderUri)
+      : getDependencyWorkspaceFolderCandidates()[0];
     if (!folder) {
       vscode.window.showWarningMessage(vscode.l10n.t('Open a workspace folder before syncing classpath.'));
       return;
@@ -526,6 +658,20 @@ export function activate(context: vscode.ExtensionContext): void {
       return;
     }
     const detectedProvider: 'maven' | 'sbt' = providerResult.provider;
+
+    const continueAction = vscode.l10n.t('Continue');
+    const cancelAction = vscode.l10n.t('Cancel');
+    const confirmation = await vscode.window.showWarningMessage(
+      vscode.l10n.t('This will download dependency sources and javadocs for your classpath artifacts. Continue?'),
+      {
+        modal: true
+      },
+      continueAction,
+      cancelAction
+    );
+    if (confirmation !== continueAction) {
+      return;
+    }
 
     try {
       const summary = await vscode.window.withProgress(
@@ -788,6 +934,7 @@ export function activate(context: vscode.ExtensionContext): void {
   void (async () => {
     await detectWorkspaceBuildTools(buildToolDetectionSession, buildToolState, logger, false);
     await profileManager.initialize();
+    await maybeShowFirstTimeDependencySyncBanner();
   })();
 
   void modeManager.initialize();

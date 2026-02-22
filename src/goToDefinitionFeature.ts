@@ -166,6 +166,82 @@ function symbolKindCodicon(kind: IndexedSymbol['symbolKind']): string {
   return '$(symbol-method)';
 }
 
+function isJdkSymbol(symbol: IndexedSymbol): boolean {
+  const filePath = symbol.filePath.toLowerCase();
+  const pkg = symbol.packageName.toLowerCase();
+  return filePath.includes('/jmods/')
+    || filePath.includes('\\jmods\\')
+    || filePath.endsWith('/lib/rt.jar')
+    || filePath.endsWith('\\lib\\rt.jar')
+    || pkg.startsWith('java.')
+    || pkg.startsWith('javax.')
+    || pkg.startsWith('jdk.');
+}
+
+function isDependencySymbol(symbol: IndexedSymbol): boolean {
+  const filePath = symbol.filePath.toLowerCase();
+  return symbol.packageName === 'dependency'
+    || filePath.endsWith('.jar')
+    || filePath.endsWith('.jmod');
+}
+
+function provenanceKey(symbol: IndexedSymbol): 'workspace' | 'dependency' | 'jdk' {
+  if (isJdkSymbol(symbol)) {
+    return 'jdk';
+  }
+
+  if (isDependencySymbol(symbol)) {
+    return 'dependency';
+  }
+
+  return 'workspace';
+}
+
+function provenanceRank(symbol: IndexedSymbol): number {
+  const key = provenanceKey(symbol);
+  if (key === 'workspace') {
+    return 0;
+  }
+
+  if (key === 'dependency') {
+    return 1;
+  }
+
+  return 2;
+}
+
+function provenanceBadge(symbol: IndexedSymbol): string {
+  const key = provenanceKey(symbol);
+  if (key === 'jdk') {
+    return '[JDK]';
+  }
+
+  if (key === 'dependency') {
+    return '[Dependency]';
+  }
+
+  return '[Workspace]';
+}
+
+function dependencyArtifactHint(symbol: IndexedSymbol): string | undefined {
+  const normalized = symbol.filePath.replace(/\\/g, '/');
+  const fileName = normalized.split('/').pop();
+  if (!fileName) {
+    return undefined;
+  }
+
+  if (!fileName.endsWith('.jar') && !fileName.endsWith('.jmod')) {
+    return undefined;
+  }
+
+  const versionMatch = fileName.match(/-(\d+(?:\.\d+)*(?:[-.][A-Za-z0-9]+)*)\.(jar|jmod)$/);
+  if (!versionMatch) {
+    return fileName;
+  }
+
+  return `${fileName} (v${versionMatch[1]})`;
+}
+
 export class GoToDefinitionProvider implements vscode.DefinitionProvider {
   private readonly symbolIndexManager: SymbolIndexManager;
   private readonly getMode: () => WorkspaceMode;
@@ -951,16 +1027,19 @@ export class GoToDefinitionProvider implements vscode.DefinitionProvider {
     const candidates = [...nativeMatches]
       .filter((symbol) => symbol.symbolName.toLowerCase() === originSnapshot.tokenText.toLowerCase())
       .sort((left, right) => compareSymbols(left, right));
+    const finalCandidates = [...candidates, ...dependencyMatches]
+      .filter((symbol) => symbol.symbolName.toLowerCase() === originSnapshot.tokenText.toLowerCase())
+      .sort((left, right) => compareSymbols(left, right));
 
-    this.logger.debug('SEARCH', `Indexed candidates for '${originSnapshot.tokenText}': native=${nativeMatches.length}, dependency=${dependencyMatches.length}, final=${candidates.length}.`);
+    this.logger.debug('SEARCH', `Indexed candidates for '${originSnapshot.tokenText}': native=${nativeMatches.length}, dependency=${dependencyMatches.length}, final=${finalCandidates.length}.`);
 
 
-    const confidence: StageConfidence = candidates.length === 1 ? 'high' : (candidates.length > 1 ? 'medium' : 'low');
+    const confidence: StageConfidence = finalCandidates.length === 1 ? 'high' : (finalCandidates.length > 1 ? 'medium' : 'low');
 
     return {
       stage: 'E',
       confidence,
-      candidates
+      candidates: finalCandidates
     };
   }
 
@@ -997,18 +1076,24 @@ export class GoToDefinitionProvider implements vscode.DefinitionProvider {
     candidates: readonly IndexedSymbol[],
     stage: StageResolutionResult['stage']
   ): Promise<IndexedSymbol | undefined> {
-    const sortedCandidates = [...candidates].sort(
-      stage === 'A' || stage === 'B'
-        ? compareSymbolsWithCursorProximity(originSnapshot.originLine + 1)
-        : (left, right) => compareSymbols(left, right)
-    );
+    const intraGroupSorter = stage === 'A' || stage === 'B'
+      ? compareSymbolsWithCursorProximity(originSnapshot.originLine + 1)
+      : (left: IndexedSymbol, right: IndexedSymbol) => compareSymbols(left, right);
+    const sortedCandidates = [...candidates].sort((left, right) => {
+      const provenanceDelta = provenanceRank(left) - provenanceRank(right);
+      if (provenanceDelta !== 0) {
+        return provenanceDelta;
+      }
+
+      return intraGroupSorter(left, right);
+    });
     const reason = stageReasonBadge(stage);
 
     const picked = await vscode.window.showQuickPick(
       sortedCandidates.map((entry) => ({
-        label: `${symbolKindCodicon(entry.symbolKind)} ${entry.symbolName} — ${vscode.workspace.asRelativePath(vscode.Uri.file(entry.filePath), false)}:${entry.lineNumber}`,
+        label: `${symbolKindCodicon(entry.symbolKind)} ${entry.symbolName} — ${vscode.workspace.asRelativePath(vscode.Uri.file(entry.filePath), false)}:${entry.lineNumber} ${provenanceBadge(entry)}`,
         description: entry.packageName || entry.containerName,
-        detail: `[${reason}] ${entry.symbolKind} • ${entry.visibility}${entry.visibility === 'private' ? ' • ⚠️ private' : ''}`,
+        detail: `[${reason}] ${entry.symbolKind} • ${entry.visibility}${entry.visibility === 'private' ? ' • ⚠️ private' : ''} • ${provenanceBadge(entry)}${dependencyArtifactHint(entry) ? ` • ${dependencyArtifactHint(entry)}` : ''}`,
         entry
       })),
       {

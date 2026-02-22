@@ -14,6 +14,54 @@ interface RankedSymbol {
   readonly recencyScore: number;
 }
 
+function isDependencySymbol(symbol: IndexedSymbol): boolean {
+  const filePath = symbol.filePath.toLowerCase();
+  return symbol.packageName === 'dependency'
+    || filePath.endsWith('.jar')
+    || filePath.endsWith('.jmod');
+}
+
+function dependencyArtifactHint(symbol: IndexedSymbol): string {
+  const normalizedPath = symbol.filePath.replace(/\\/g, '/');
+  const fileName = normalizedPath.split('/').pop();
+  if (!fileName) {
+    return 'dependency';
+  }
+
+  return fileName;
+}
+
+function dependencySpecificity(symbol: IndexedSymbol): number {
+  const packageSegments = symbol.packageName
+    .split('.')
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0).length;
+  return packageSegments;
+}
+
+function dependencyScalaBoost(symbol: IndexedSymbol): number {
+  const filePath = symbol.filePath.toLowerCase();
+  return filePath.includes('scala') ? 1 : 0;
+}
+
+function getWorkspaceFolderCandidates(): readonly vscode.WorkspaceFolder[] {
+  const folders = vscode.workspace.workspaceFolders ?? [];
+  if (folders.length <= 1) {
+    return folders;
+  }
+
+  const activeUri = vscode.window.activeTextEditor?.document.uri;
+  const activeFolder = activeUri ? vscode.workspace.getWorkspaceFolder(activeUri) : undefined;
+  if (!activeFolder) {
+    return folders;
+  }
+
+  return [
+    activeFolder,
+    ...folders.filter((folder) => folder.uri.toString() !== activeFolder.uri.toString())
+  ];
+}
+
 function toSymbolKind(kind: IndexedSymbol['symbolKind']): vscode.SymbolKind {
   if (kind === 'package') {
     return vscode.SymbolKind.Package;
@@ -111,31 +159,47 @@ export class WorkspaceSymbolSearchProvider implements vscode.WorkspaceSymbolProv
     const indexedSymbols = normalizedQuery.length === 0
       ? this.symbolIndexManager.getAllSymbols()
       : await this.symbolIndexManager.searchSymbols(normalizedQuery, 300, token);
-    let allSymbols: readonly IndexedSymbol[] = indexedSymbols;
+    const workspaceSymbols = indexedSymbols.filter((symbol) => !isDependencySymbol(symbol));
+    const folderCandidates = getWorkspaceFolderCandidates();
+    let dependencySymbols: readonly IndexedSymbol[] = [];
     if (mode === 'C' && normalizedQuery.length > 0) {
       const dependencyConfig = await readDependencyConfigFromWorkspaceConfig();
-      const folder = vscode.workspace.workspaceFolders?.[0];
-      if (dependencyConfig.enabled && dependencyConfig.includeInWorkspaceSymbol && folder) {
-        const dependencySymbols = await queryDependencySymbols(folder, normalizedQuery, 100);
-        allSymbols = [...indexedSymbols, ...dependencySymbols];
+      if (dependencyConfig.enabled && dependencyConfig.includeInWorkspaceSymbol && folderCandidates.length > 0) {
+        const deduped = new Map<string, IndexedSymbol>();
+        for (const folder of folderCandidates) {
+          if (token.isCancellationRequested) {
+            return [];
+          }
+
+          const entries = await queryDependencySymbols(folder, normalizedQuery, 100);
+          for (const entry of entries) {
+            const key = `${entry.filePath}:${entry.lineNumber}:${entry.symbolKind}:${entry.symbolName}`;
+            if (!deduped.has(key)) {
+              deduped.set(key, entry);
+            }
+          }
+        }
+
+        dependencySymbols = Array.from(deduped.values());
       }
     }
-    const ranked: RankedSymbol[] = [];
-    let indexedModuleRoot: string | undefined;
+    const rankedWorkspace: RankedSymbol[] = [];
+    const rankedDependency: RankedSymbol[] = [];
+    const indexedModuleRootsByFolder = new Map<string, string>();
 
     if (mode === 'C') {
-      const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
       const configuredModulePath = await readModuleFolderFromWorkspaceConfig();
-      if (workspaceFolder) {
-        indexedModuleRoot = path.resolve(
+      for (const workspaceFolder of folderCandidates) {
+        const indexedModuleRoot = path.resolve(
           configuredModulePath
             ? path.join(workspaceFolder.uri.fsPath, configuredModulePath)
             : workspaceFolder.uri.fsPath
         );
+        indexedModuleRootsByFolder.set(workspaceFolder.uri.toString(), indexedModuleRoot);
       }
     }
 
-    for (const symbol of allSymbols) {
+    for (const symbol of workspaceSymbols) {
       if (token.isCancellationRequested) {
         return [];
       }
@@ -146,7 +210,7 @@ export class WorkspaceSymbolSearchProvider implements vscode.WorkspaceSymbolProv
         continue;
       }
 
-      ranked.push({
+      rankedWorkspace.push({
         symbol,
         prefixRank: normalizedName.startsWith(normalizedQuery) ? 0 : 1,
         fuzzyScore: score,
@@ -154,7 +218,28 @@ export class WorkspaceSymbolSearchProvider implements vscode.WorkspaceSymbolProv
       });
     }
 
-    ranked.sort((left, right) => {
+    for (const symbol of dependencySymbols) {
+      if (token.isCancellationRequested) {
+        return [];
+      }
+
+      const normalizedName = symbol.symbolName.toLowerCase();
+      const score = subsequenceScore(normalizedQuery, normalizedName);
+      if (score === undefined) {
+        continue;
+      }
+
+      const specificityPenalty = dependencySpecificity(symbol);
+      const scalaBoost = dependencyScalaBoost(symbol) * 10;
+      rankedDependency.push({
+        symbol,
+        prefixRank: normalizedName.startsWith(normalizedQuery) ? 0 : 1,
+        fuzzyScore: score + scalaBoost - specificityPenalty,
+        recencyScore: 0
+      });
+    }
+
+    const rankComparator = (left: RankedSymbol, right: RankedSymbol): number => {
       if (left.prefixRank !== right.prefixRank) {
         return left.prefixRank - right.prefixRank;
       }
@@ -168,14 +253,24 @@ export class WorkspaceSymbolSearchProvider implements vscode.WorkspaceSymbolProv
       }
 
       return compareSymbols(left.symbol, right.symbol);
-    });
+    };
 
-    return ranked.slice(0, 200).map((entry) => {
+    rankedWorkspace.sort(rankComparator);
+    rankedDependency.sort(rankComparator);
+
+    const merged = [...rankedWorkspace.slice(0, 200), ...rankedDependency.slice(0, 100)].slice(0, 300);
+
+    return merged.map((entry) => {
       const symbol = entry.symbol;
-      const modulePrefix = mode === 'C' ? this.resolveModulePrefix(symbol.filePath) : undefined;
-      const source = this.resolveSymbolSource(mode, symbol.filePath, indexedModuleRoot);
-      const badge = formatResultBadge(source);
-      const symbolLabel = modulePrefix ? `${badge} ${modulePrefix}: ${symbol.symbolName}` : `${badge} ${symbol.symbolName}`;
+      const isDependency = isDependencySymbol(symbol);
+      const symbolLabel = isDependency
+        ? `[dep] ${symbol.symbolName} — ${dependencyArtifactHint(symbol)}`
+        : (() => {
+          const modulePrefix = mode === 'C' ? this.resolveModulePrefix(symbol.filePath) : undefined;
+          const source = this.resolveSymbolSource(mode, symbol.filePath, indexedModuleRootsByFolder);
+          const badge = formatResultBadge(source);
+          return modulePrefix ? `${badge} ${modulePrefix}: ${symbol.symbolName}` : `${badge} ${symbol.symbolName}`;
+        })();
       return new vscode.SymbolInformation(
         symbolLabel,
         toSymbolKind(symbol.symbolKind),
@@ -185,12 +280,24 @@ export class WorkspaceSymbolSearchProvider implements vscode.WorkspaceSymbolProv
     });
   }
 
-  private resolveSymbolSource(mode: WorkspaceMode, filePath: string, indexedModuleRoot: string | undefined): ResultSource {
+  private resolveSymbolSource(
+    mode: WorkspaceMode,
+    filePath: string,
+    indexedModuleRootsByFolder: ReadonlyMap<string, string>
+  ): ResultSource {
     if (mode === 'A') {
       return 'text';
     }
 
-    if (mode !== 'C' || !indexedModuleRoot) {
+    if (mode !== 'C') {
+      return 'indexed';
+    }
+
+    const workspaceFolder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(filePath));
+    const indexedModuleRoot = workspaceFolder
+      ? indexedModuleRootsByFolder.get(workspaceFolder.uri.toString())
+      : undefined;
+    if (!indexedModuleRoot) {
       return 'indexed';
     }
 

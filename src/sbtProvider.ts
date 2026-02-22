@@ -3,7 +3,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { executeBuildCommand } from './buildCommandExecutor';
-import { ensureScalaLiteCacheDir, getScalaLiteCacheUri } from './scalaLiteCache';
+import { ensureScalaLiteCacheDir, getScalaLiteCacheUri, pruneScalaLiteCacheSnapshots } from './scalaLiteCache';
 
 export interface ResolveSbtClasspathOptions {
   readonly workspaceFolder: vscode.WorkspaceFolder;
@@ -142,6 +142,7 @@ async function writeClasspathCache(
   };
 
   await vscode.workspace.fs.writeFile(cacheUri, Buffer.from(`${JSON.stringify(payload, null, 2)}\n`, 'utf8'));
+  await pruneScalaLiteCacheSnapshots(workspaceFolder);
   return cacheUri.fsPath;
 }
 

@@ -21,6 +21,31 @@ export interface NativeParseResult {
   readonly diagnostics: readonly NativeDiagnostic[];
 }
 
+export interface NativeDependencySymbol {
+  readonly simpleName: string;
+  readonly fqcn: string;
+  readonly packageName: string;
+  readonly kind: string;
+  readonly visibility: string;
+  readonly jarPath: string;
+  readonly methodCount: number;
+  readonly fieldCount: number;
+}
+
+export interface NativeDependencyIndexStats {
+  readonly schemaVersion: number;
+  readonly jarCount: number;
+  readonly segmentCount: number;
+  readonly loadedSegmentCount: number;
+  readonly symbolCount: number;
+}
+
+export interface NativeDependencyMemoryUsage {
+  readonly loadedSegmentCount: number;
+  readonly loadedSymbolCount: number;
+  readonly estimatedBytes: number;
+}
+
 export interface NativeDiagnostic {
   readonly filePath: string;
   readonly lineNumber: number;
@@ -68,6 +93,21 @@ interface NativeAddonApi {
     includes?: string;
     excludes?: string;
   };
+  index_dependency_jars(jarPaths: readonly string[], outputPath: string, options?: { maxSegments?: number }): void;
+  load_dependency_index(path: string): number;
+  close_dependency_index(handle: number): void;
+  query_dependency_symbols(handle: number, name: string, limit: number): readonly NativeDependencySymbol[];
+  query_dependency_symbol_by_fqcn(handle: number, fqcn: string): NativeDependencySymbol | undefined;
+  query_dependency_symbols_in_package(
+    handle: number,
+    name: string,
+    packagePath: string,
+    limit: number
+  ): readonly NativeDependencySymbol[];
+  get_dependency_index_stats(handle: number): NativeDependencyIndexStats;
+  get_dependency_memory_usage(handle: number): NativeDependencyMemoryUsage;
+  set_dependency_index_max_loaded_segments(handle: number, maxSegments?: number): void;
+  evict_dependency_index_segments(handle: number, maxSegments: number): number;
   shutdown(): void;
 }
 
@@ -125,8 +165,66 @@ type NativeAddonMethodMap = {
     includes?: string;
     excludes?: string;
   };
+  readonly indexDependencyJars?: (jarPaths: readonly string[], outputPath: string, options?: { maxSegments?: number }) => void;
+  readonly index_dependency_jars?: (jarPaths: readonly string[], outputPath: string, options?: { maxSegments?: number }) => void;
+  readonly loadDependencyIndex?: (path: string) => number;
+  readonly load_dependency_index?: (path: string) => number;
+  readonly closeDependencyIndex?: (handle: number) => void;
+  readonly close_dependency_index?: (handle: number) => void;
+  readonly queryDependencySymbols?: (handle: number, name: string, limit: number) => readonly RawNativeDependencySymbol[];
+  readonly query_dependency_symbols?: (handle: number, name: string, limit: number) => readonly RawNativeDependencySymbol[];
+  readonly queryDependencySymbolByFqcn?: (handle: number, fqcn: string) => RawNativeDependencySymbol | undefined;
+  readonly query_dependency_symbol_by_fqcn?: (handle: number, fqcn: string) => RawNativeDependencySymbol | undefined;
+  readonly queryDependencySymbolsInPackage?: (handle: number, name: string, packagePath: string, limit: number) => readonly RawNativeDependencySymbol[];
+  readonly query_dependency_symbols_in_package?: (handle: number, name: string, packagePath: string, limit: number) => readonly RawNativeDependencySymbol[];
+  readonly getDependencyIndexStats?: (handle: number) => RawNativeDependencyIndexStats;
+  readonly get_dependency_index_stats?: (handle: number) => RawNativeDependencyIndexStats;
+  readonly getDependencyMemoryUsage?: (handle: number) => RawNativeDependencyMemoryUsage;
+  readonly get_dependency_memory_usage?: (handle: number) => RawNativeDependencyMemoryUsage;
+  readonly setDependencyIndexMaxLoadedSegments?: (handle: number, maxSegments?: number) => void;
+  readonly set_dependency_index_max_loaded_segments?: (handle: number, maxSegments?: number) => void;
+  readonly evictDependencyIndexSegments?: (handle: number, maxSegments: number) => number;
+  readonly evict_dependency_index_segments?: (handle: number, maxSegments: number) => number;
   readonly shutdown?: () => void;
 };
+
+interface RawNativeDependencySymbol {
+  readonly simpleName?: string;
+  readonly simple_name?: string;
+  readonly fqcn?: string;
+  readonly packageName?: string;
+  readonly package_name?: string;
+  readonly kind?: string;
+  readonly visibility?: string;
+  readonly jarPath?: string;
+  readonly jar_path?: string;
+  readonly methodCount?: number;
+  readonly method_count?: number;
+  readonly fieldCount?: number;
+  readonly field_count?: number;
+}
+
+interface RawNativeDependencyIndexStats {
+  readonly schemaVersion?: number;
+  readonly schema_version?: number;
+  readonly jarCount?: number;
+  readonly jar_count?: number;
+  readonly segmentCount?: number;
+  readonly segment_count?: number;
+  readonly loadedSegmentCount?: number;
+  readonly loaded_segment_count?: number;
+  readonly symbolCount?: number;
+  readonly symbol_count?: number;
+}
+
+interface RawNativeDependencyMemoryUsage {
+  readonly loadedSegmentCount?: number;
+  readonly loaded_segment_count?: number;
+  readonly loadedSymbolCount?: number;
+  readonly loaded_symbol_count?: number;
+  readonly estimatedBytes?: number;
+  readonly estimated_bytes?: number;
+}
 
 interface RawNativeSymbol {
   readonly symbolName?: string;
@@ -634,6 +732,59 @@ function normalizeNativeDiagnosticArray(raw: readonly RawNativeDiagnostic[]): re
     .filter((entry): entry is NativeDiagnostic => entry !== undefined);
 }
 
+function normalizeNativeDependencySymbol(raw: RawNativeDependencySymbol): NativeDependencySymbol | undefined {
+  const simpleName = typeof raw.simpleName === 'string' && raw.simpleName.length > 0
+    ? raw.simpleName
+    : raw.simple_name;
+  const fqcn = typeof raw.fqcn === 'string' && raw.fqcn.length > 0
+    ? raw.fqcn
+    : undefined;
+  const packageName = typeof raw.packageName === 'string' && raw.packageName.length > 0
+    ? raw.packageName
+    : raw.package_name;
+  const jarPath = typeof raw.jarPath === 'string' && raw.jarPath.length > 0
+    ? raw.jarPath
+    : raw.jar_path;
+  if (!simpleName || !fqcn || !packageName || !jarPath) {
+    return undefined;
+  }
+
+  return {
+    simpleName,
+    fqcn,
+    packageName,
+    kind: typeof raw.kind === 'string' && raw.kind.length > 0 ? raw.kind : 'class',
+    visibility: typeof raw.visibility === 'string' && raw.visibility.length > 0 ? raw.visibility : 'public',
+    jarPath,
+    methodCount: Math.max(0, Math.round(raw.methodCount ?? raw.method_count ?? 0)),
+    fieldCount: Math.max(0, Math.round(raw.fieldCount ?? raw.field_count ?? 0))
+  };
+}
+
+function normalizeNativeDependencySymbols(raw: readonly RawNativeDependencySymbol[]): readonly NativeDependencySymbol[] {
+  return raw
+    .map((entry) => normalizeNativeDependencySymbol(entry))
+    .filter((entry): entry is NativeDependencySymbol => entry !== undefined);
+}
+
+function normalizeNativeDependencyIndexStats(raw: RawNativeDependencyIndexStats): NativeDependencyIndexStats {
+  return {
+    schemaVersion: Math.max(0, Math.round(raw.schemaVersion ?? raw.schema_version ?? 0)),
+    jarCount: Math.max(0, Math.round(raw.jarCount ?? raw.jar_count ?? 0)),
+    segmentCount: Math.max(0, Math.round(raw.segmentCount ?? raw.segment_count ?? 0)),
+    loadedSegmentCount: Math.max(0, Math.round(raw.loadedSegmentCount ?? raw.loaded_segment_count ?? 0)),
+    symbolCount: Math.max(0, Math.round(raw.symbolCount ?? raw.symbol_count ?? 0))
+  };
+}
+
+function normalizeNativeDependencyMemoryUsage(raw: RawNativeDependencyMemoryUsage): NativeDependencyMemoryUsage {
+  return {
+    loadedSegmentCount: Math.max(0, Math.round(raw.loadedSegmentCount ?? raw.loaded_segment_count ?? 0)),
+    loadedSymbolCount: Math.max(0, Math.round(raw.loadedSymbolCount ?? raw.loaded_symbol_count ?? 0)),
+    estimatedBytes: Math.max(0, Math.round(raw.estimatedBytes ?? raw.estimated_bytes ?? 0))
+  };
+}
+
 function resolveNativeAddonApi(moduleExports: unknown): NativeAddonApi | undefined {
   if (!moduleExports || (typeof moduleExports !== 'object' && typeof moduleExports !== 'function')) {
     return undefined;
@@ -661,6 +812,18 @@ function resolveNativeAddonApi(moduleExports: unknown): NativeAddonApi | undefin
   const evictFile = methods.evict_file ?? methods.evictFile;
   const rebuildIndex = methods.rebuild_index ?? methods.rebuildIndex;
   const getMemoryUsage = methods.get_memory_usage ?? methods.getMemoryUsage;
+  const indexDependencyJars = methods.index_dependency_jars ?? methods.indexDependencyJars;
+  const loadDependencyIndex = methods.load_dependency_index ?? methods.loadDependencyIndex;
+  const closeDependencyIndex = methods.close_dependency_index ?? methods.closeDependencyIndex;
+  const queryDependencySymbols = methods.query_dependency_symbols ?? methods.queryDependencySymbols;
+  const queryDependencySymbolByFqcn = methods.query_dependency_symbol_by_fqcn ?? methods.queryDependencySymbolByFqcn;
+  const queryDependencySymbolsInPackage = methods.query_dependency_symbols_in_package ?? methods.queryDependencySymbolsInPackage;
+  const getDependencyIndexStats = methods.get_dependency_index_stats ?? methods.getDependencyIndexStats;
+  const getDependencyMemoryUsage = methods.get_dependency_memory_usage ?? methods.getDependencyMemoryUsage;
+  const setDependencyIndexMaxLoadedSegments =
+    methods.set_dependency_index_max_loaded_segments ?? methods.setDependencyIndexMaxLoadedSegments;
+  const evictDependencyIndexSegments =
+    methods.evict_dependency_index_segments ?? methods.evictDependencyIndexSegments;
   const shutdown = methods.shutdown;
 
   if (
@@ -704,6 +867,81 @@ function resolveNativeAddonApi(moduleExports: unknown): NativeAddonApi | undefin
     evict_file: (filePath: string) => evictFile.call(instance, filePath),
     rebuild_index: (files: readonly { filePath: string; content: string }[]) => rebuildIndex.call(instance, files),
     get_memory_usage: () => getMemoryUsage.call(instance),
+    index_dependency_jars: (jarPaths: readonly string[], outputPath: string, options?: { maxSegments?: number }) => {
+      if (typeof indexDependencyJars !== 'function') {
+        throw new NativeEngineUnavailableError('Dependency indexing API unavailable in native addon.');
+      }
+      return indexDependencyJars.call(instance, jarPaths, outputPath, options);
+    },
+    load_dependency_index: (path: string) => {
+      if (typeof loadDependencyIndex !== 'function') {
+        throw new NativeEngineUnavailableError('Dependency index loading API unavailable in native addon.');
+      }
+      return loadDependencyIndex.call(instance, path) as number;
+    },
+    close_dependency_index: (handle: number) => {
+      if (typeof closeDependencyIndex !== 'function') {
+        return;
+      }
+      closeDependencyIndex.call(instance, handle);
+    },
+    query_dependency_symbols: (handle: number, name: string, limit: number) => {
+      if (typeof queryDependencySymbols !== 'function') {
+        return [];
+      }
+      const symbols = queryDependencySymbols.call(instance, handle, name, limit) as readonly RawNativeDependencySymbol[];
+      return normalizeNativeDependencySymbols(symbols);
+    },
+    query_dependency_symbol_by_fqcn: (handle: number, fqcn: string) => {
+      if (typeof queryDependencySymbolByFqcn !== 'function') {
+        return undefined;
+      }
+      const symbol = queryDependencySymbolByFqcn.call(instance, handle, fqcn) as RawNativeDependencySymbol | undefined;
+      return symbol ? normalizeNativeDependencySymbol(symbol) : undefined;
+    },
+    query_dependency_symbols_in_package: (handle: number, name: string, packagePath: string, limit: number) => {
+      if (typeof queryDependencySymbolsInPackage !== 'function') {
+        return [];
+      }
+      const symbols = queryDependencySymbolsInPackage.call(instance, handle, name, packagePath, limit) as readonly RawNativeDependencySymbol[];
+      return normalizeNativeDependencySymbols(symbols);
+    },
+    get_dependency_index_stats: (handle: number) => {
+      if (typeof getDependencyIndexStats !== 'function') {
+        return {
+          schemaVersion: 0,
+          jarCount: 0,
+          segmentCount: 0,
+          loadedSegmentCount: 0,
+          symbolCount: 0
+        };
+      }
+      const stats = getDependencyIndexStats.call(instance, handle) as RawNativeDependencyIndexStats;
+      return normalizeNativeDependencyIndexStats(stats);
+    },
+    get_dependency_memory_usage: (handle: number) => {
+      if (typeof getDependencyMemoryUsage !== 'function') {
+        return {
+          loadedSegmentCount: 0,
+          loadedSymbolCount: 0,
+          estimatedBytes: 0
+        };
+      }
+      const usage = getDependencyMemoryUsage.call(instance, handle) as RawNativeDependencyMemoryUsage;
+      return normalizeNativeDependencyMemoryUsage(usage);
+    },
+    set_dependency_index_max_loaded_segments: (handle: number, maxSegments?: number) => {
+      if (typeof setDependencyIndexMaxLoadedSegments !== 'function') {
+        return;
+      }
+      setDependencyIndexMaxLoadedSegments.call(instance, handle, maxSegments);
+    },
+    evict_dependency_index_segments: (handle: number, maxSegments: number) => {
+      if (typeof evictDependencyIndexSegments !== 'function') {
+        return 0;
+      }
+      return Math.max(0, Math.round(evictDependencyIndexSegments.call(instance, handle, maxSegments) as number));
+    },
     shutdown: () => shutdown.call(instance)
   };
 }
@@ -758,12 +996,14 @@ function loadNativeAddon(): AddonLoadResult {
 export class NativeEngine {
   public status: NativeEngineStatus;
   private readonly fallback: TypeScriptFallbackEngine;
+  private readonly dependencyIndexHandles: Set<number>;
   private addon: NativeAddonApi | undefined;
 
   private constructor(status: NativeEngineStatus, addon: NativeAddonApi | undefined) {
     this.status = status;
     this.addon = addon;
     this.fallback = new TypeScriptFallbackEngine();
+    this.dependencyIndexHandles = new Set<number>();
   }
 
   public static create(): NativeEngine {
@@ -937,6 +1177,7 @@ export class NativeEngine {
     try {
       if (this.addon) {
         this.addon.shutdown();
+        this.dependencyIndexHandles.clear();
       } else {
         this.fallback.shutdown();
       }
@@ -944,6 +1185,160 @@ export class NativeEngine {
       this.status = 'crashed';
       throw new NativeEngineCrashError(error instanceof Error ? error.message : String(error));
     }
+  }
+
+  public async indexDependencyJars(
+    jarPaths: readonly string[],
+    outputPath: string,
+    options?: { maxSegments?: number },
+    cancellationToken?: vscode.CancellationToken
+  ): Promise<void> {
+    return this.withCancellation(async () => {
+      if (!this.addon) {
+        return;
+      }
+
+      this.addon.index_dependency_jars(jarPaths, outputPath, options);
+    }, cancellationToken);
+  }
+
+  public async loadDependencyIndex(pathToIndex: string, cancellationToken?: vscode.CancellationToken): Promise<number | undefined> {
+    return this.withCancellation(async () => {
+      if (!this.addon) {
+        return undefined;
+      }
+
+      const handle = this.addon.load_dependency_index(pathToIndex);
+      this.dependencyIndexHandles.add(handle);
+      return handle;
+    }, cancellationToken);
+  }
+
+  public async closeDependencyIndex(handle: number, cancellationToken?: vscode.CancellationToken): Promise<void> {
+    return this.withCancellation(async () => {
+      if (!this.addon) {
+        return;
+      }
+
+      this.addon.close_dependency_index(handle);
+      this.dependencyIndexHandles.delete(handle);
+    }, cancellationToken);
+  }
+
+  public async queryDependencySymbols(
+    handle: number,
+    name: string,
+    limit = 200,
+    cancellationToken?: vscode.CancellationToken
+  ): Promise<readonly NativeDependencySymbol[]> {
+    return this.withCancellation(async () => {
+      if (!this.addon) {
+        return [];
+      }
+
+      return this.addon.query_dependency_symbols(handle, name, limit);
+    }, cancellationToken);
+  }
+
+  public async queryDependencySymbolByFqcn(
+    handle: number,
+    fqcn: string,
+    cancellationToken?: vscode.CancellationToken
+  ): Promise<NativeDependencySymbol | undefined> {
+    return this.withCancellation(async () => {
+      if (!this.addon) {
+        return undefined;
+      }
+
+      return this.addon.query_dependency_symbol_by_fqcn(handle, fqcn);
+    }, cancellationToken);
+  }
+
+  public async queryDependencySymbolsInPackage(
+    handle: number,
+    name: string,
+    packagePath: string,
+    limit = 200,
+    cancellationToken?: vscode.CancellationToken
+  ): Promise<readonly NativeDependencySymbol[]> {
+    return this.withCancellation(async () => {
+      if (!this.addon) {
+        return [];
+      }
+
+      return this.addon.query_dependency_symbols_in_package(handle, name, packagePath, limit);
+    }, cancellationToken);
+  }
+
+  public async getDependencyIndexStats(
+    handle: number,
+    cancellationToken?: vscode.CancellationToken
+  ): Promise<NativeDependencyIndexStats> {
+    return this.withCancellation(async () => {
+      if (!this.addon) {
+        return {
+          schemaVersion: 0,
+          jarCount: 0,
+          segmentCount: 0,
+          loadedSegmentCount: 0,
+          symbolCount: 0
+        };
+      }
+
+      return this.addon.get_dependency_index_stats(handle);
+    }, cancellationToken);
+  }
+
+  public async getDependencyMemoryUsage(
+    handle: number,
+    cancellationToken?: vscode.CancellationToken
+  ): Promise<NativeDependencyMemoryUsage> {
+    return this.withCancellation(async () => {
+      if (!this.addon) {
+        return {
+          loadedSegmentCount: 0,
+          loadedSymbolCount: 0,
+          estimatedBytes: 0
+        };
+      }
+
+      return this.addon.get_dependency_memory_usage(handle);
+    }, cancellationToken);
+  }
+
+  public async setDependencyIndexMaxLoadedSegments(handle: number, maxSegments?: number): Promise<void> {
+    if (!this.addon) {
+      return;
+    }
+
+    this.addon.set_dependency_index_max_loaded_segments(handle, maxSegments);
+  }
+
+  public async evictDependencyIndexSegments(maxSegments: number): Promise<number> {
+    if (!this.addon || this.dependencyIndexHandles.size === 0) {
+      return 0;
+    }
+
+    let evicted = 0;
+    const normalized = Math.max(0, Math.round(maxSegments));
+    for (const handle of this.dependencyIndexHandles) {
+      evicted += this.addon.evict_dependency_index_segments(handle, normalized);
+    }
+
+    return evicted;
+  }
+
+  public async getTotalDependencyMemoryUsageBytes(): Promise<number> {
+    if (!this.addon || this.dependencyIndexHandles.size === 0) {
+      return 0;
+    }
+
+    let total = 0;
+    for (const handle of this.dependencyIndexHandles) {
+      total += Math.max(0, Math.round(this.addon.get_dependency_memory_usage(handle).estimatedBytes));
+    }
+
+    return total;
   }
 
   public async restart(): Promise<void> {

@@ -52,5 +52,6 @@
   "configuration.scalaLite.build.maven.args.description": "Extra Maven arguments for classpath/sources commands.",
   "configuration.scalaLite.build.maven.wrapperPath.description": "Override path to the Maven wrapper executable.",
   "configuration.scalaLite.build.sbt.args.description": "Extra SBT arguments for classpath/sources commands.",
-  "configuration.scalaLite.build.sbt.strategy.description": "SBT resolution strategy: sbt-show (accurate), coursier (fast), or auto."
+  "configuration.scalaLite.build.sbt.strategy.description": "SBT resolution strategy: sbt-show (accurate), coursier (fast), or auto.",
+  "configuration.scalaLite.budgets.memory.depsMb.description": "Maximum hot dependency-index memory budget in megabytes."
 }

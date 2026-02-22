@@ -37,6 +37,7 @@ test('PF-0009: memory budget feature registers memory report command and output 
 
   assert.equal(source.includes("COMMAND_MEMORY_REPORT = 'scalaLite.memoryReport'"), true);
   assert.equal(source.includes("createOutputChannel('Scala Lite Memory')"), true);
-  assert.equal(source.includes('Mode heap budget (bytes):'), true);
+  assert.equal(source.includes('Mode dependency budget (bytes):'), true);
+  assert.equal(source.includes('Dependency hot memory (bytes):'), true);
   assert.equal(source.includes('[MEMORY_REPORT]'), true);
 });

@@ -364,6 +364,12 @@
           ],
           "default": "sbt-show",
           "description": "%configuration.scalaLite.build.sbt.strategy.description%"
+        },
+        "scalaLite.budgets.memory.depsMb": {
+          "type": "integer",
+          "default": 256,
+          "minimum": 1,
+          "description": "%configuration.scalaLite.budgets.memory.depsMb.description%"
         }
       }
     },

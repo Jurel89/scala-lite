@@ -1,7 +1,20 @@
 use rayon::prelude::*;
+use rayon::ThreadPoolBuilder;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::thread::available_parallelism;
 use thiserror::Error;
+
+mod dep_index;
+
+pub use dep_index::{
+    build_dependency_snapshot, changed_jar_paths, dependency_index_is_stale,
+    evict_dependency_index_segments, get_dep_index_stats, load_dependency_index,
+    query_dep_symbol_by_fqcn, query_dep_symbols, query_dep_symbols_in_package,
+    save_dependency_index, set_dependency_index_max_loaded_segments, ClassKind, DepIndexStats,
+    DepSegment, DepSymbolEntry, DependencySnapshot, DependencySymbol, DependencySymbolInput,
+    JarManifest, SegmentLookupEntry, Visibility, DEPENDENCY_INDEX_SCHEMA_VERSION,
+};
 
 #[cfg(feature = "napi")]
 use napi_derive::napi;
@@ -63,6 +76,13 @@ pub struct ParseFileResult {
 pub struct FileInput {
     pub file_path: String,
     pub content: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JarIndexResult {
+    pub jar_path: String,
+    pub class_count: u32,
+    pub indexed_symbol_count: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -250,6 +270,128 @@ pub enum EngineError {
     EmptyFilePath,
     #[error("query cannot be empty")]
     EmptyQuery,
+    #[error("failed to build rayon thread pool: {0}")]
+    ThreadPoolBuild(String),
+    #[error("io error: {0}")]
+    Io(String),
+    #[error("serialization error: {0}")]
+    Serialization(String),
+    #[error("deserialization error: {0}")]
+    Deserialization(String),
+    #[error("invalid dependency index: {0}")]
+    InvalidDependencyIndex(String),
+    #[error("unsupported dependency index schema version: {0}")]
+    UnsupportedSchemaVersion(u16),
+}
+
+const MAX_PARALLEL_JAR_WORKERS: usize = 8;
+
+pub fn compute_parallel_jar_worker_count() -> usize {
+    let available = available_parallelism()
+        .map(|value| value.get())
+        .unwrap_or(1);
+    let half = std::cmp::max(1, available / 2);
+    std::cmp::min(half, MAX_PARALLEL_JAR_WORKERS)
+}
+
+pub fn index_jars_parallel(jar_paths: &[String]) -> Result<Vec<JarIndexResult>, EngineError> {
+    let worker_count = compute_parallel_jar_worker_count();
+    let pool = ThreadPoolBuilder::new()
+        .num_threads(worker_count)
+        .build()
+        .map_err(|error| EngineError::ThreadPoolBuild(error.to_string()))?;
+
+    let mut indexed: Vec<(usize, JarIndexResult)> = pool.install(|| {
+        jar_paths
+            .par_iter()
+            .enumerate()
+            .map(|(position, jar_path)| {
+                let symbols = extract_dependency_symbols_from_jar(jar_path);
+                (
+                    position,
+                    JarIndexResult {
+                        jar_path: jar_path.clone(),
+                        class_count: symbols.len().min(u32::MAX as usize) as u32,
+                        indexed_symbol_count: symbols.len().min(u32::MAX as usize) as u32,
+                    },
+                )
+            })
+            .collect()
+    });
+
+    indexed.sort_by(|left, right| {
+        left.1
+            .jar_path
+            .cmp(&right.1.jar_path)
+            .then(left.0.cmp(&right.0))
+    });
+
+    Ok(indexed.into_iter().map(|(_, result)| result).collect())
+}
+
+fn parse_class_entry(jar_path: &str, entry_name: &str) -> Option<DependencySymbolInput> {
+    if !entry_name.ends_with(".class") || entry_name.ends_with("module-info.class") {
+        return None;
+    }
+
+    let normalized_path = entry_name.trim_end_matches(".class").replace('\\', "/");
+    if normalized_path.is_empty() {
+        return None;
+    }
+
+    let fqcn = normalized_path.replace('/', ".");
+    let simple_name = fqcn.split('.').next_back()?.to_string();
+    if simple_name.is_empty() {
+        return None;
+    }
+
+    let package_name = fqcn
+        .rsplit_once('.')
+        .map(|(package, _)| package.to_string())
+        .unwrap_or_default();
+
+    Some(DependencySymbolInput {
+        simple_name,
+        fqcn,
+        package_name,
+        kind: ClassKind::Class,
+        visibility: Visibility::Unknown,
+        jar_path: jar_path.to_string(),
+        method_count: 0,
+        field_count: 0,
+    })
+}
+
+fn extract_dependency_symbols_from_jar(jar_path: &str) -> Vec<DependencySymbolInput> {
+    let file = match std::fs::File::open(jar_path) {
+        Ok(file) => file,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut archive = match zip::ZipArchive::new(file) {
+        Ok(archive) => archive,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut symbols = Vec::<DependencySymbolInput>::new();
+    for index in 0..archive.len() {
+        let Ok(entry) = archive.by_index(index) else {
+            continue;
+        };
+
+        let name = entry.name().to_string();
+        if let Some(symbol) = parse_class_entry(jar_path, &name) {
+            symbols.push(symbol);
+        }
+    }
+
+    symbols.sort_by(|left, right| {
+        left.fqcn
+            .cmp(&right.fqcn)
+            .then(left.jar_path.cmp(&right.jar_path))
+    });
+    symbols.dedup_by(|left, right| left.fqcn == right.fqcn && left.jar_path == right.jar_path);
+    symbols
 }
 
 fn tokenize_symbols(file_path: &str, content: &str) -> Vec<SymbolEntry> {
@@ -1357,18 +1499,55 @@ val publicValue = 42
         let after_evict_count = index.string_interner.strings.len();
         assert!(after_evict_count < initial_string_count);
     }
+
+    #[test]
+    fn parallel_jar_indexing_is_deterministic() {
+        let jar_paths = vec![
+            "zeta.jar".to_string(),
+            "alpha.jar".to_string(),
+            "alpha.jar".to_string(),
+            "beta.jar".to_string(),
+        ];
+
+        let first = index_jars_parallel(&jar_paths).expect("parallel jar indexing should succeed");
+        let second = index_jars_parallel(&jar_paths).expect("parallel jar indexing should succeed");
+
+        assert_eq!(first, second);
+
+        let ordered_paths: Vec<&str> = first.iter().map(|entry| entry.jar_path.as_str()).collect();
+        assert_eq!(
+            ordered_paths,
+            vec!["alpha.jar", "alpha.jar", "beta.jar", "zeta.jar"]
+        );
+    }
+
+    #[test]
+    fn parallel_jar_worker_count_is_bounded() {
+        let workers = compute_parallel_jar_worker_count();
+        assert!(workers >= 1);
+        assert!(workers <= MAX_PARALLEL_JAR_WORKERS);
+    }
 }
 
 #[cfg(feature = "napi")]
 mod napi_bridge {
     use super::{
-        append_files, get_diagnostics, get_memory_usage, parse_file, query_package_exists,
-        query_symbols, query_symbols_in_package, DiagnosticEntry, FileInput, IndexSnapshot,
-        MemoryUsage, ParseFileResult, SymbolEntry,
+        append_files, build_dependency_snapshot, evict_dependency_index_segments,
+        get_dep_index_stats, get_diagnostics, get_memory_usage, load_dependency_index, parse_file,
+        query_dep_symbol_by_fqcn, query_dep_symbols, query_dep_symbols_in_package,
+        query_package_exists, query_symbols, query_symbols_in_package, save_dependency_index,
+        set_dependency_index_max_loaded_segments, ClassKind, DiagnosticEntry, FileInput,
+        IndexSnapshot, JarManifest, MemoryUsage, ParseFileResult, SymbolEntry, Visibility,
     };
     use napi::bindgen_prelude::{Error, Result};
     use napi_derive::napi;
+    use std::collections::hash_map::DefaultHasher;
+    use std::collections::HashMap;
+    use std::fs;
+    use std::hash::{Hash, Hasher};
+    use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::{Arc, Mutex};
+    use std::time::UNIX_EPOCH;
 
     #[napi(object)]
     pub struct JsFileInput {
@@ -1387,9 +1566,99 @@ mod napi_bridge {
         pub excludes: String,
     }
 
+    #[napi(object)]
+    pub struct JsDependencySymbol {
+        pub simple_name: String,
+        pub fqcn: String,
+        pub package_name: String,
+        pub kind: String,
+        pub visibility: String,
+        pub jar_path: String,
+        pub method_count: i32,
+        pub field_count: i32,
+    }
+
+    #[napi(object)]
+    pub struct JsDepIndexStats {
+        pub schema_version: i32,
+        pub jar_count: i32,
+        pub segment_count: i32,
+        pub loaded_segment_count: i32,
+        pub symbol_count: i32,
+    }
+
+    #[napi(object)]
+    pub struct JsDepMemoryUsage {
+        pub loaded_segment_count: i32,
+        pub loaded_symbol_count: i32,
+        pub estimated_bytes: i64,
+    }
+
+    #[napi(object)]
+    pub struct JsDepIndexOptions {
+        pub _max_segments: Option<i32>,
+    }
+
+    fn class_kind_to_wire(kind: ClassKind) -> String {
+        match kind {
+            ClassKind::Class => "class".to_string(),
+            ClassKind::Interface => "interface".to_string(),
+            ClassKind::Trait => "trait".to_string(),
+            ClassKind::Object => "object".to_string(),
+            ClassKind::Enum => "enum".to_string(),
+            ClassKind::Annotation => "annotation".to_string(),
+            ClassKind::Unknown => "unknown".to_string(),
+        }
+    }
+
+    fn visibility_to_wire(visibility: Visibility) -> String {
+        match visibility {
+            Visibility::Public => "public".to_string(),
+            Visibility::Protected => "protected".to_string(),
+            Visibility::Private => "private".to_string(),
+            Visibility::Unknown => "unknown".to_string(),
+        }
+    }
+
+    fn to_js_dependency_symbol(symbol: super::DependencySymbol) -> JsDependencySymbol {
+        JsDependencySymbol {
+            simple_name: symbol.simple_name,
+            fqcn: symbol.fqcn,
+            package_name: symbol.package_name,
+            kind: class_kind_to_wire(symbol.kind),
+            visibility: visibility_to_wire(symbol.visibility),
+            jar_path: symbol.jar_path,
+            method_count: i32::from(symbol.method_count),
+            field_count: i32::from(symbol.field_count),
+        }
+    }
+
+    fn to_manifest(jar_path: &str) -> JarManifest {
+        let metadata = fs::metadata(jar_path).ok();
+        let size_bytes = metadata.as_ref().map(|entry| entry.len()).unwrap_or(0);
+        let modified_secs = metadata
+            .as_ref()
+            .and_then(|entry| entry.modified().ok())
+            .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_secs())
+            .unwrap_or(0);
+
+        let mut hasher = DefaultHasher::new();
+        size_bytes.hash(&mut hasher);
+        modified_secs.hash(&mut hasher);
+
+        JarManifest {
+            jar_path: jar_path.to_string(),
+            hash: hasher.finish(),
+            size_bytes,
+        }
+    }
+
     #[napi]
     pub struct NativeEngine {
         inner: Arc<Mutex<IndexSnapshot>>,
+        dep_indexes: Arc<Mutex<HashMap<u32, super::DependencySnapshot>>>,
+        dep_index_counter: Arc<AtomicU32>,
     }
 
     #[napi]
@@ -1398,6 +1667,8 @@ mod napi_bridge {
         pub fn new() -> Self {
             Self {
                 inner: Arc::new(Mutex::new(IndexSnapshot::default())),
+                dep_indexes: Arc::new(Mutex::new(HashMap::new())),
+                dep_index_counter: Arc::new(AtomicU32::new(1)),
             }
         }
 
@@ -1535,12 +1806,231 @@ mod napi_bridge {
         }
 
         #[napi]
+        pub fn index_dependency_jars(
+            &self,
+            jar_paths: Vec<String>,
+            output_path: String,
+            options: Option<JsDepIndexOptions>,
+        ) -> Result<()> {
+            let manifests: Vec<JarManifest> = jar_paths
+                .iter()
+                .map(|jar_path| to_manifest(jar_path))
+                .collect();
+            let mut symbols = Vec::new();
+            for jar_path in &jar_paths {
+                symbols.extend(super::extract_dependency_symbols_from_jar(jar_path));
+            }
+
+            symbols.sort_by(|left, right| {
+                left.fqcn
+                    .cmp(&right.fqcn)
+                    .then(left.jar_path.cmp(&right.jar_path))
+            });
+            let snapshot = build_dependency_snapshot(&symbols, &manifests);
+            if let Some(max_segments) = options.and_then(|value| value._max_segments) {
+                set_dependency_index_max_loaded_segments(
+                    &snapshot,
+                    Some(max_segments.max(0).min(usize::MAX as i32) as usize),
+                );
+            }
+            save_dependency_index(&output_path, &snapshot)
+                .map_err(|error| Error::from_reason(error.to_string()))
+        }
+
+        #[napi]
+        pub fn load_dependency_index(&self, path: String) -> Result<u32> {
+            let snapshot = load_dependency_index(&path)
+                .map_err(|error| Error::from_reason(error.to_string()))?;
+            let handle = self.dep_index_counter.fetch_add(1, Ordering::Relaxed);
+            let mut guard = self
+                .dep_indexes
+                .lock()
+                .map_err(|_| Error::from_reason("dependency index lock poisoned".to_string()))?;
+            guard.insert(handle, snapshot);
+            Ok(handle)
+        }
+
+        #[napi]
+        pub fn close_dependency_index(&self, handle: u32) -> Result<()> {
+            let mut guard = self
+                .dep_indexes
+                .lock()
+                .map_err(|_| Error::from_reason("dependency index lock poisoned".to_string()))?;
+            guard.remove(&handle);
+            Ok(())
+        }
+
+        #[napi]
+        pub fn query_dependency_symbols(
+            &self,
+            handle: u32,
+            name: String,
+            limit: u32,
+        ) -> Result<Vec<JsDependencySymbol>> {
+            let guard = self
+                .dep_indexes
+                .lock()
+                .map_err(|_| Error::from_reason("dependency index lock poisoned".to_string()))?;
+            let snapshot = guard.get(&handle).ok_or_else(|| {
+                Error::from_reason(format!("dependency index handle not found: {handle}"))
+            })?;
+
+            let symbols = query_dep_symbols(snapshot, &name, limit)
+                .map_err(|error| Error::from_reason(error.to_string()))?;
+            Ok(symbols.into_iter().map(to_js_dependency_symbol).collect())
+        }
+
+        #[napi]
+        pub fn query_dependency_symbol_by_fqcn(
+            &self,
+            handle: u32,
+            fqcn: String,
+        ) -> Result<Option<JsDependencySymbol>> {
+            let guard = self
+                .dep_indexes
+                .lock()
+                .map_err(|_| Error::from_reason("dependency index lock poisoned".to_string()))?;
+            let snapshot = guard.get(&handle).ok_or_else(|| {
+                Error::from_reason(format!("dependency index handle not found: {handle}"))
+            })?;
+
+            let symbol = query_dep_symbol_by_fqcn(snapshot, &fqcn)
+                .map_err(|error| Error::from_reason(error.to_string()))?;
+            Ok(symbol.map(to_js_dependency_symbol))
+        }
+
+        #[napi]
+        pub fn query_dependency_symbols_in_package(
+            &self,
+            handle: u32,
+            name: String,
+            package_path: String,
+            limit: u32,
+        ) -> Result<Vec<JsDependencySymbol>> {
+            let guard = self
+                .dep_indexes
+                .lock()
+                .map_err(|_| Error::from_reason("dependency index lock poisoned".to_string()))?;
+            let snapshot = guard.get(&handle).ok_or_else(|| {
+                Error::from_reason(format!("dependency index handle not found: {handle}"))
+            })?;
+
+            let symbols = query_dep_symbols_in_package(snapshot, &name, &package_path, limit)
+                .map_err(|error| Error::from_reason(error.to_string()))?;
+            Ok(symbols.into_iter().map(to_js_dependency_symbol).collect())
+        }
+
+        #[napi]
+        pub fn get_dependency_index_stats(&self, handle: u32) -> Result<JsDepIndexStats> {
+            let guard = self
+                .dep_indexes
+                .lock()
+                .map_err(|_| Error::from_reason("dependency index lock poisoned".to_string()))?;
+            let snapshot = guard.get(&handle).ok_or_else(|| {
+                Error::from_reason(format!("dependency index handle not found: {handle}"))
+            })?;
+
+            let stats = get_dep_index_stats(snapshot);
+            Ok(JsDepIndexStats {
+                schema_version: i32::from(stats.schema_version),
+                jar_count: stats.jar_count.min(i32::MAX as usize) as i32,
+                segment_count: stats.segment_count.min(i32::MAX as usize) as i32,
+                loaded_segment_count: stats.loaded_segment_count.min(i32::MAX as usize) as i32,
+                symbol_count: stats.symbol_count.min(i32::MAX as usize) as i32,
+            })
+        }
+
+        #[napi]
+        pub fn get_dependency_memory_usage(&self, handle: u32) -> Result<JsDepMemoryUsage> {
+            let guard = self
+                .dep_indexes
+                .lock()
+                .map_err(|_| Error::from_reason("dependency index lock poisoned".to_string()))?;
+            let snapshot = guard.get(&handle).ok_or_else(|| {
+                Error::from_reason(format!("dependency index handle not found: {handle}"))
+            })?;
+
+            let loaded = snapshot.loaded_segments.borrow();
+            let loaded_symbol_count = loaded
+                .values()
+                .map(|segment| {
+                    segment
+                        .by_simple_name
+                        .values()
+                        .map(std::vec::Vec::len)
+                        .sum::<usize>()
+                })
+                .sum::<usize>();
+
+            let estimated_bytes = loaded
+                .values()
+                .map(|segment| {
+                    let simple_entries = segment
+                        .by_simple_name
+                        .values()
+                        .map(std::vec::Vec::len)
+                        .sum::<usize>();
+                    let fqcn_entries = segment.by_fqcn.len();
+                    (simple_entries + fqcn_entries) * std::mem::size_of::<super::DepSymbolEntry>()
+                })
+                .sum::<usize>();
+
+            Ok(JsDepMemoryUsage {
+                loaded_segment_count: loaded.len().min(i32::MAX as usize) as i32,
+                loaded_symbol_count: loaded_symbol_count.min(i32::MAX as usize) as i32,
+                estimated_bytes: estimated_bytes.min(i64::MAX as usize) as i64,
+            })
+        }
+
+        #[napi]
+        pub fn set_dependency_index_max_loaded_segments(
+            &self,
+            handle: u32,
+            max_segments: Option<i32>,
+        ) -> Result<()> {
+            let guard = self
+                .dep_indexes
+                .lock()
+                .map_err(|_| Error::from_reason("dependency index lock poisoned".to_string()))?;
+            let snapshot = guard.get(&handle).ok_or_else(|| {
+                Error::from_reason(format!("dependency index handle not found: {handle}"))
+            })?;
+
+            let normalized = max_segments.map(|value| value.max(0) as usize);
+            set_dependency_index_max_loaded_segments(snapshot, normalized);
+            Ok(())
+        }
+
+        #[napi]
+        pub fn evict_dependency_index_segments(
+            &self,
+            handle: u32,
+            max_segments: i32,
+        ) -> Result<i32> {
+            let guard = self
+                .dep_indexes
+                .lock()
+                .map_err(|_| Error::from_reason("dependency index lock poisoned".to_string()))?;
+            let snapshot = guard.get(&handle).ok_or_else(|| {
+                Error::from_reason(format!("dependency index handle not found: {handle}"))
+            })?;
+
+            let evicted = evict_dependency_index_segments(snapshot, max_segments.max(0) as usize);
+            Ok(evicted.min(i32::MAX as usize) as i32)
+        }
+
+        #[napi]
         pub fn shutdown(&self) -> Result<()> {
             let mut guard = self
                 .inner
                 .lock()
                 .map_err(|_| Error::from_reason("engine lock poisoned".to_string()))?;
             *guard = IndexSnapshot::default();
+            let mut dep_guard = self
+                .dep_indexes
+                .lock()
+                .map_err(|_| Error::from_reason("dependency index lock poisoned".to_string()))?;
+            dep_guard.clear();
             Ok(())
         }
     }

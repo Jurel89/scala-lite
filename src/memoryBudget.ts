@@ -4,6 +4,9 @@ import { WorkspaceMode } from './modePresentation';
 import { StructuredLogger } from './structuredLogger';
 import { MemoryBudgetOverrideConfig, readMemoryBudgetOverridesFromWorkspaceConfig } from './workspaceConfig';
 import { MemoryBreakdown } from './symbolIndex';
+import { getDependencyHotMemoryUsageBytes } from './dependencyQuery';
+import { getNativeEngine } from './nativeEngineState';
+import { getScalaLiteCacheSummary } from './scalaLiteCache';
 
 export const COMMAND_RUN_MEMORY_BUDGET_AUDIT = 'scalaLite.runMemoryBudgetAudit';
 export const COMMAND_MEMORY_REPORT = 'scalaLite.memoryReport';
@@ -12,6 +15,7 @@ interface ModeMemoryBudget {
   readonly maxTotalBytes: number;
   readonly maxHeapBytes: number;
   readonly maxNativeBytes: number;
+  readonly maxDependencyBytes: number;
 }
 
 export interface WorkspaceMemoryMetrics {
@@ -27,6 +31,7 @@ interface MemoryUsageSnapshot {
   readonly nativeAccountedBytes: number;
   readonly nativeEstimatedOverheadBytes: number;
   readonly nativeRssBytes: number;
+  readonly dependencyHotBytes: number;
   readonly totalBytes: number;
   readonly nativeIncludes: string;
   readonly nativeExcludes: string;
@@ -37,12 +42,17 @@ export interface BudgetAuditResult {
   readonly heapOverage: number;
   readonly nativeOverage: number;
   readonly totalOverage: number;
+  readonly dependencyOverage: number;
   readonly heapUsedBytes: number;
   readonly nativeUsedBytes: number;
   readonly totalUsedBytes: number;
+  readonly dependencyUsedBytes: number;
+  readonly combinedUsedBytes: number;
   readonly maxHeapBytes: number;
   readonly maxNativeBytes: number;
   readonly maxTotalBytes: number;
+  readonly maxDependencyBytes: number;
+  readonly combinedBudgetBytes: number;
 }
 
 const MB = 1024 * 1024;
@@ -51,17 +61,20 @@ const MODE_MEMORY_BUDGETS: Record<WorkspaceMode, ModeMemoryBudget> = {
   A: {
     maxTotalBytes: 25 * MB,
     maxHeapBytes: 20 * MB,
-    maxNativeBytes: 5 * MB
+    maxNativeBytes: 5 * MB,
+    maxDependencyBytes: 0
   },
   B: {
     maxTotalBytes: 55 * MB,
     maxHeapBytes: 30 * MB,
-    maxNativeBytes: 25 * MB
+    maxNativeBytes: 25 * MB,
+    maxDependencyBytes: 0
   },
   C: {
     maxTotalBytes: 100 * MB,
     maxHeapBytes: 30 * MB,
-    maxNativeBytes: 70 * MB
+    maxNativeBytes: 70 * MB,
+    maxDependencyBytes: 256 * MB
   }
 };
 
@@ -96,6 +109,7 @@ export function computeBudgetForMode(
   const modeCTotalCap = overrides.totalMb ? toMbBytes(overrides.totalMb) : defaultModeCTotalCap;
   const modeCHeapCap = overrides.heapMb ? toMbBytes(overrides.heapMb) : toMbBytes(512);
   const modeCNativeCap = overrides.nativeMb ? toMbBytes(overrides.nativeMb) : toMbBytes(256);
+  const modeCDepsCap = overrides.depsMb ? toMbBytes(overrides.depsMb) : toMbBytes(256);
 
   if (mode === 'A') {
     return floor;
@@ -110,7 +124,8 @@ export function computeBudgetForMode(
     return {
       maxTotalBytes,
       maxHeapBytes,
-      maxNativeBytes
+      maxNativeBytes,
+      maxDependencyBytes: floor.maxDependencyBytes
     };
   }
 
@@ -128,7 +143,8 @@ export function computeBudgetForMode(
   return {
     maxTotalBytes: cappedTotal,
     maxHeapBytes: cappedHeap,
-    maxNativeBytes: cappedNative
+    maxNativeBytes: cappedNative,
+    maxDependencyBytes: Math.max(floor.maxDependencyBytes, modeCDepsCap)
   };
 }
 
@@ -213,6 +229,7 @@ function sampleMemoryUsage(metrics: WorkspaceMemoryMetrics): MemoryUsageSnapshot
   const extensionHostHeapBytes = Math.max(0, Math.round(process.memoryUsage().heapUsed));
   const scalaLiteEstimatedHeapBytes = Math.max(0, Math.round(metrics.scalaLiteEstimatedHeapBytes));
   const nativeUsage = readNativeUsage();
+  const dependencyHotBytes = Math.max(0, Math.round(getDependencyHotMemoryUsageBytes()));
   const totalBytes = scalaLiteEstimatedHeapBytes + nativeUsage.nativeRssBytes;
 
   return {
@@ -221,6 +238,7 @@ function sampleMemoryUsage(metrics: WorkspaceMemoryMetrics): MemoryUsageSnapshot
     nativeAccountedBytes: nativeUsage.accountedBytes,
     nativeEstimatedOverheadBytes: nativeUsage.estimatedOverheadBytes,
     nativeRssBytes: nativeUsage.nativeRssBytes,
+    dependencyHotBytes,
     totalBytes,
     nativeIncludes: nativeUsage.includes,
     nativeExcludes: nativeUsage.excludes
@@ -239,32 +257,52 @@ export async function auditMemoryBudgetForMode(
   const withinHeap = snapshot.scalaLiteEstimatedHeapBytes <= budget.maxHeapBytes;
   const withinNative = snapshot.nativeRssBytes <= budget.maxNativeBytes;
   const withinTotal = snapshot.totalBytes <= budget.maxTotalBytes;
+  const withinDependency = snapshot.dependencyHotBytes <= budget.maxDependencyBytes;
+  const combinedUsedBytes = snapshot.totalBytes + snapshot.dependencyHotBytes;
+  const combinedBudgetBytes = budget.maxTotalBytes + budget.maxDependencyBytes;
 
   const logMessage =
     `Mode ${mode} memory usage — extension host heap: ${formatBytes(snapshot.extensionHostHeapBytes)}, ` +
     `estimated scala-lite heap: ${formatBytes(snapshot.scalaLiteEstimatedHeapBytes)}/${formatBytes(budget.maxHeapBytes)}, ` +
     `native: ${formatBytes(snapshot.nativeRssBytes)}/${formatBytes(budget.maxNativeBytes)}, ` +
-    `total: ${formatBytes(snapshot.totalBytes)}/${formatBytes(budget.maxTotalBytes)}. ` +
+    `workspace total: ${formatBytes(snapshot.totalBytes)}/${formatBytes(budget.maxTotalBytes)}, ` +
+    `dependency hot: ${formatBytes(snapshot.dependencyHotBytes)}/${formatBytes(budget.maxDependencyBytes)}, ` +
+    `combined total: ${formatBytes(combinedUsedBytes)}/${formatBytes(combinedBudgetBytes)}. ` +
     `Native accounting — accounted: ${formatBytes(snapshot.nativeAccountedBytes)}, ` +
     `estimated overhead: ${formatBytes(snapshot.nativeEstimatedOverheadBytes)}, ` +
     `includes: ${snapshot.nativeIncludes}, excludes: ${snapshot.nativeExcludes}.`;
 
   const result: BudgetAuditResult = {
-    exceeded: !(withinHeap && withinNative && withinTotal),
+    exceeded: !(withinHeap && withinNative && withinTotal && withinDependency),
     heapOverage: Math.max(0, snapshot.scalaLiteEstimatedHeapBytes - budget.maxHeapBytes),
     nativeOverage: Math.max(0, snapshot.nativeRssBytes - budget.maxNativeBytes),
     totalOverage: Math.max(0, snapshot.totalBytes - budget.maxTotalBytes),
+    dependencyOverage: Math.max(0, snapshot.dependencyHotBytes - budget.maxDependencyBytes),
     heapUsedBytes: snapshot.scalaLiteEstimatedHeapBytes,
     nativeUsedBytes: snapshot.nativeRssBytes,
     totalUsedBytes: snapshot.totalBytes,
+    dependencyUsedBytes: snapshot.dependencyHotBytes,
+    combinedUsedBytes,
     maxHeapBytes: budget.maxHeapBytes,
     maxNativeBytes: budget.maxNativeBytes,
-    maxTotalBytes: budget.maxTotalBytes
+    maxTotalBytes: budget.maxTotalBytes,
+    maxDependencyBytes: budget.maxDependencyBytes,
+    combinedBudgetBytes
   };
 
-  if (withinHeap && withinNative && withinTotal) {
+  if (withinHeap && withinNative && withinTotal && withinDependency) {
     logger.info('BUDGET', logMessage);
     return result;
+  }
+
+  if (result.dependencyOverage > 0) {
+    try {
+      const evicted = await getNativeEngine().evictDependencyIndexSegments(0);
+      if (evicted > 0) {
+        logger.info('BUDGET', `Evicted ${evicted} dependency index segments after dependency budget overage.`);
+      }
+    } catch {
+    }
   }
 
   logger.warn('BUDGET', `[MEMORY] Budget exceeded. ${logMessage}`);
@@ -289,6 +327,9 @@ export function registerMemoryBudgetFeature(
     const mode = getMode();
     const metrics = getMetrics();
     const breakdown = await getMemoryBreakdown();
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    const cacheSummary = await getScalaLiteCacheSummary(folder);
+    const dependencyHotBytes = getDependencyHotMemoryUsageBytes();
     const overrides = await readMemoryBudgetOverridesFromWorkspaceConfig();
     const budget = computeBudgetForMode(mode, metrics, overrides);
 
@@ -303,6 +344,8 @@ export function registerMemoryBudgetFeature(
       `Content cache size (bytes): ${breakdown.contentCacheBytes}`,
       `Estimated JS heap contribution (bytes): ${breakdown.estimatedJsHeapBytes}`,
       `Native engine memory (bytes): ${breakdown.nativeMemoryUsage.nativeRssBytes}`,
+      `Dependency hot memory (bytes): ${dependencyHotBytes}`,
+      `Dependency disk cache size (bytes): ${cacheSummary.totalBytes}`,
       `Native accounted bytes: ${breakdown.nativeMemoryUsage.accountedBytes}`,
       `Native estimated overhead bytes: ${breakdown.nativeMemoryUsage.estimatedOverheadBytes}`,
       `Native includes: ${breakdown.nativeMemoryUsage.includes}`,
@@ -311,7 +354,9 @@ export function registerMemoryBudgetFeature(
       `String table estimated byte savings: ${breakdown.stringTableBytes ?? 'n/a'}`,
       `Mode heap budget (bytes): ${budget.maxHeapBytes}`,
       `Mode native budget (bytes): ${budget.maxNativeBytes}`,
-      `Mode total budget (bytes): ${budget.maxTotalBytes}`
+      `Mode workspace budget (bytes): ${budget.maxTotalBytes}`,
+      `Mode dependency budget (bytes): ${budget.maxDependencyBytes}`,
+      `Mode combined budget (bytes): ${budget.maxTotalBytes + budget.maxDependencyBytes}`
     ];
 
     memoryOutputChannel.clear();

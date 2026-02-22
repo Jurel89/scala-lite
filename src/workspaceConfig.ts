@@ -30,6 +30,14 @@ export interface BudgetConfig {
   readonly indexTimeMs?: number;
   readonly maxSearchResults?: number;
   readonly formatterTimeMs?: number;
+  readonly indexBatchSize?: number;
+  readonly memory?: MemoryBudgetOverrideConfig;
+}
+
+export interface MemoryBudgetOverrideConfig {
+  readonly heapMb?: number;
+  readonly nativeMb?: number;
+  readonly totalMb?: number;
 }
 
 export interface EffectiveBudgetConfig {
@@ -605,6 +613,45 @@ export async function readBudgetConfigFromWorkspaceConfig(): Promise<EffectiveBu
     indexTimeMs,
     maxSearchResults,
     formatterTimeMs
+  };
+}
+
+export async function readIndexBatchSizeFromWorkspaceConfig(): Promise<number> {
+  const folder = getPrimaryWorkspaceFolder();
+  if (!folder) {
+    return 100;
+  }
+
+  const config = await readConfig(folder);
+  const value = config.budgets?.indexBatchSize;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return 100;
+  }
+
+  return Math.min(1000, Math.max(1, Math.round(value)));
+}
+
+export async function readMemoryBudgetOverridesFromWorkspaceConfig(): Promise<MemoryBudgetOverrideConfig> {
+  const folder = getPrimaryWorkspaceFolder();
+  if (!folder) {
+    return {};
+  }
+
+  const config = await readConfig(folder);
+  const memory = config.budgets?.memory;
+
+  const normalizeMb = (value: number | undefined): number | undefined => {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+      return undefined;
+    }
+
+    return Math.round(value);
+  };
+
+  return {
+    heapMb: normalizeMb(memory?.heapMb),
+    nativeMb: normalizeMb(memory?.nativeMb),
+    totalMb: normalizeMb(memory?.totalMb)
   };
 }
 

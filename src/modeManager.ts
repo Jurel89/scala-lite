@@ -413,6 +413,10 @@ export class ModeManager implements vscode.Disposable {
     return this.buildIntegrationEnabled;
   }
 
+  public async switchModeForAutomation(targetMode: WorkspaceMode): Promise<void> {
+    await this.switchMode(targetMode, false);
+  }
+
   public refreshStatusBar(): void {
     this.updateStatusBar(this.activeMode);
   }

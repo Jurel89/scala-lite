@@ -52,5 +52,5 @@ test('PF-0003: memory budget audit command is contributed and registered', () =>
 
 test('PF-0003: mode changes trigger memory budget audit', () => {
   const source = readSource('src/extension.ts');
-  assert.equal(source.includes('auditMemoryBudgetForMode(mode, logger);'), true);
+  assert.equal(source.includes('auditMemoryBudgetForMode(mode, logger, symbolIndexManager.getMemoryBudgetMetrics());'), true);
 });

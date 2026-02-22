@@ -7,8 +7,12 @@ export type NativeEngineStatus = 'active' | 'fallback' | 'crashed' | 'restarting
 
 export interface NativeMemoryUsage {
   readonly heapBytes: number;
+  readonly accountedBytes: number;
+  readonly estimatedOverheadBytes: number;
   readonly nativeRssBytes: number;
   readonly totalBytes: number;
+  readonly includes: string;
+  readonly excludes: string;
 }
 
 export interface NativeParseResult {
@@ -42,13 +46,28 @@ export class NativeEngineCrashError extends Error {
 interface NativeAddonApi {
   parse_file(filePath: string, content: string): NativeParseResult;
   index_files(files: readonly { filePath: string; content: string }[]): number;
+  append_files(files: readonly { filePath: string; content: string }[]): number;
+  clear_index(): void;
   query_symbols(query: string, limit: number): readonly IndexedSymbol[];
   query_symbols_in_package(query: string, packagePath: string, limit: number): readonly IndexedSymbol[];
   query_package_exists(packagePath: string): boolean;
   get_diagnostics(filePath: string): readonly NativeDiagnostic[];
   evict_file(filePath: string): void;
   rebuild_index(files: readonly { filePath: string; content: string }[]): number;
-  get_memory_usage(): { heapBytes?: number; heap_bytes?: number; nativeRssBytes?: number; native_rss_bytes?: number; totalBytes?: number; total_bytes?: number };
+  get_memory_usage(): {
+    heapBytes?: number;
+    heap_bytes?: number;
+    accountedBytes?: number;
+    accounted_bytes?: number;
+    estimatedOverheadBytes?: number;
+    estimated_overhead_bytes?: number;
+    nativeRssBytes?: number;
+    native_rss_bytes?: number;
+    totalBytes?: number;
+    total_bytes?: number;
+    includes?: string;
+    excludes?: string;
+  };
   shutdown(): void;
 }
 
@@ -62,6 +81,10 @@ type NativeAddonMethodMap = {
   readonly parse_file?: (filePath: string, content: string) => NativeParseResult;
   readonly indexFiles?: (files: readonly { filePath: string; content: string }[]) => number;
   readonly index_files?: (files: readonly { filePath: string; content: string }[]) => number;
+  readonly appendFiles?: (files: readonly { filePath: string; content: string }[]) => number;
+  readonly append_files?: (files: readonly { filePath: string; content: string }[]) => number;
+  readonly clearIndex?: () => void;
+  readonly clear_index?: () => void;
   readonly querySymbols?: (query: string, limit: number) => readonly IndexedSymbol[];
   readonly query_symbols?: (query: string, limit: number) => readonly IndexedSymbol[];
   readonly querySymbolsInPackage?: (query: string, packagePath: string, limit: number) => readonly IndexedSymbol[];
@@ -77,18 +100,30 @@ type NativeAddonMethodMap = {
   readonly getMemoryUsage?: () => {
     heapBytes?: number;
     heap_bytes?: number;
+    accountedBytes?: number;
+    accounted_bytes?: number;
+    estimatedOverheadBytes?: number;
+    estimated_overhead_bytes?: number;
     nativeRssBytes?: number;
     native_rss_bytes?: number;
     totalBytes?: number;
     total_bytes?: number;
+    includes?: string;
+    excludes?: string;
   };
   readonly get_memory_usage?: () => {
     heapBytes?: number;
     heap_bytes?: number;
+    accountedBytes?: number;
+    accounted_bytes?: number;
+    estimatedOverheadBytes?: number;
+    estimated_overhead_bytes?: number;
     nativeRssBytes?: number;
     native_rss_bytes?: number;
     totalBytes?: number;
     total_bytes?: number;
+    includes?: string;
+    excludes?: string;
   };
   readonly shutdown?: () => void;
 };
@@ -144,6 +179,7 @@ interface RawNativeImport {
 class TypeScriptFallbackEngine {
   private readonly symbolsByName = new Map<string, IndexedSymbol[]>();
   private readonly diagnosticsByFile = new Map<string, NativeDiagnostic[]>();
+  private readonly symbolNamesByFile = new Map<string, Set<string>>();
 
   public parseFile(filePath: string, content: string): NativeParseResult {
     const symbols = this.extractSymbols(filePath, content);
@@ -157,21 +193,34 @@ class TypeScriptFallbackEngine {
   }
 
   public indexFiles(files: readonly { filePath: string; content: string }[]): number {
-    this.symbolsByName.clear();
-    this.diagnosticsByFile.clear();
+    this.clearIndex();
+    return this.appendFiles(files);
+  }
+
+  public appendFiles(files: readonly { filePath: string; content: string }[]): number {
 
     for (const file of files) {
+      this.evictFile(file.filePath);
       const parsed = this.parseFile(file.filePath, file.content);
+      const symbolNames = new Set<string>();
       for (const symbol of parsed.symbols) {
         const existing = this.symbolsByName.get(symbol.symbolName) ?? [];
         existing.push(symbol);
         this.symbolsByName.set(symbol.symbolName, existing);
+        symbolNames.add(symbol.symbolName);
       }
 
+      this.symbolNamesByFile.set(file.filePath, symbolNames);
       this.diagnosticsByFile.set(file.filePath, [...parsed.diagnostics]);
     }
 
-    return Array.from(this.symbolsByName.values()).reduce((sum, symbols) => sum + symbols.length, 0);
+    return this.totalSymbolCount();
+  }
+
+  public clearIndex(): void {
+    this.symbolsByName.clear();
+    this.diagnosticsByFile.clear();
+    this.symbolNamesByFile.clear();
   }
 
   public querySymbols(query: string, limit: number): readonly IndexedSymbol[] {
@@ -257,7 +306,17 @@ class TypeScriptFallbackEngine {
 
   public evictFile(filePath: string): void {
     this.diagnosticsByFile.delete(filePath);
-    for (const [key, symbols] of this.symbolsByName.entries()) {
+    const symbolNames = this.symbolNamesByFile.get(filePath);
+    if (!symbolNames || symbolNames.size === 0) {
+      return;
+    }
+
+    for (const key of symbolNames) {
+      const symbols = this.symbolsByName.get(key);
+      if (!symbols) {
+        continue;
+      }
+
       const filtered = symbols.filter((symbol) => symbol.filePath !== filePath);
       if (filtered.length === 0) {
         this.symbolsByName.delete(key);
@@ -266,27 +325,54 @@ class TypeScriptFallbackEngine {
 
       this.symbolsByName.set(key, filtered);
     }
+
+    this.symbolNamesByFile.delete(filePath);
   }
 
   public rebuildIndex(files: readonly { filePath: string; content: string }[]): number {
     return this.indexFiles(files);
   }
 
+  private totalSymbolCount(): number {
+    return Array.from(this.symbolsByName.values()).reduce((sum, symbols) => sum + symbols.length, 0);
+  }
+
   public getMemoryUsage(): NativeMemoryUsage {
-    const symbolCount = Array.from(this.symbolsByName.values()).reduce((sum, symbols) => sum + symbols.length, 0);
-    const diagnosticCount = Array.from(this.diagnosticsByFile.values()).reduce((sum, diagnostics) => sum + diagnostics.length, 0);
-    const nativeRssBytes = (symbolCount * 64) + (diagnosticCount * 96);
+    const symbolEntries = Array.from(this.symbolsByName.values()).flat();
+    const diagnosticEntries = Array.from(this.diagnosticsByFile.values()).flat();
+
+    const symbolPayloadBytes = symbolEntries.reduce((sum, symbol) => {
+      return sum + Buffer.byteLength(JSON.stringify(symbol), 'utf8');
+    }, 0);
+
+    const diagnosticPayloadBytes = diagnosticEntries.reduce((sum, diagnostic) => {
+      return sum + Buffer.byteLength(JSON.stringify(diagnostic), 'utf8');
+    }, 0);
+
+    const mapOverheadBytes = Buffer.byteLength(JSON.stringify({
+      symbolKeys: Array.from(this.symbolsByName.keys()),
+      diagnosticKeys: Array.from(this.diagnosticsByFile.keys())
+    }), 'utf8');
+
+    const accountedBytes = symbolPayloadBytes + diagnosticPayloadBytes + mapOverheadBytes;
+    const estimatedOverheadBytes = Math.round(accountedBytes * 0.2);
+    const nativeRssBytes = accountedBytes + estimatedOverheadBytes;
 
     return {
       heapBytes: 0,
+      accountedBytes,
+      estimatedOverheadBytes,
       nativeRssBytes,
-      totalBytes: nativeRssBytes
+      totalBytes: nativeRssBytes,
+      includes: 'symbol entries, diagnostic entries, map key payloads',
+      excludes: 'V8 GC metadata, allocator fragmentation, extension host shared heap'
     };
   }
 
   public shutdown(): void {
     this.symbolsByName.clear();
     this.diagnosticsByFile.clear();
+    this.symbolNamesByFile.clear();
   }
 
   private extractSymbols(filePath: string, content: string): IndexedSymbol[] {
@@ -566,6 +652,8 @@ function resolveNativeAddonApi(moduleExports: unknown): NativeAddonApi | undefin
 
   const parseFile = methods.parse_file ?? methods.parseFile;
   const indexFiles = methods.index_files ?? methods.indexFiles;
+  const appendFiles = methods.append_files ?? methods.appendFiles;
+  const clearIndex = methods.clear_index ?? methods.clearIndex;
   const querySymbols = methods.query_symbols ?? methods.querySymbols;
   const querySymbolsInPackage = methods.query_symbols_in_package ?? methods.querySymbolsInPackage;
   const queryPackageExists = methods.query_package_exists ?? methods.queryPackageExists;
@@ -578,6 +666,8 @@ function resolveNativeAddonApi(moduleExports: unknown): NativeAddonApi | undefin
   if (
     typeof parseFile !== 'function'
     || typeof indexFiles !== 'function'
+    || typeof appendFiles !== 'function'
+    || typeof clearIndex !== 'function'
     || typeof querySymbols !== 'function'
     || typeof querySymbolsInPackage !== 'function'
     || typeof queryPackageExists !== 'function'
@@ -596,6 +686,8 @@ function resolveNativeAddonApi(moduleExports: unknown): NativeAddonApi | undefin
       return normalizeNativeParseResult(parsed);
     },
     index_files: (files: readonly { filePath: string; content: string }[]) => indexFiles.call(instance, files),
+    append_files: (files: readonly { filePath: string; content: string }[]) => appendFiles.call(instance, files),
+    clear_index: () => clearIndex.call(instance),
     query_symbols: (query: string, limit: number) => {
       const symbols = querySymbols.call(instance, query, limit) as readonly RawNativeSymbol[];
       return normalizeNativeSymbolArray(symbols);
@@ -711,6 +803,30 @@ export class NativeEngine {
     }, cancellationToken);
   }
 
+  public async appendFiles(
+    files: readonly { filePath: string; content: string }[],
+    cancellationToken?: vscode.CancellationToken
+  ): Promise<number> {
+    return this.withCancellation(async () => {
+      if (!this.addon) {
+        return this.fallback.appendFiles(files);
+      }
+
+      return this.addon.append_files(files);
+    }, cancellationToken);
+  }
+
+  public async clearIndex(cancellationToken?: vscode.CancellationToken): Promise<void> {
+    return this.withCancellation(async () => {
+      if (!this.addon) {
+        this.fallback.clearIndex();
+        return;
+      }
+
+      this.addon.clear_index();
+    }, cancellationToken);
+  }
+
   public async querySymbols(
     query: string,
     limit = 200,
@@ -795,13 +911,25 @@ export class NativeEngine {
 
     const raw = this.addon.get_memory_usage();
     const heapBytes = raw.heapBytes ?? raw.heap_bytes ?? 0;
+    const accountedBytes = raw.accountedBytes ?? raw.accounted_bytes ?? 0;
+    const estimatedOverheadBytes = raw.estimatedOverheadBytes ?? raw.estimated_overhead_bytes ?? 0;
     const nativeRssBytes = raw.nativeRssBytes ?? raw.native_rss_bytes ?? 0;
     const totalBytes = raw.totalBytes ?? raw.total_bytes ?? (heapBytes + nativeRssBytes);
+    const includes = typeof raw.includes === 'string' && raw.includes.length > 0
+      ? raw.includes
+      : 'native engine allocations';
+    const excludes = typeof raw.excludes === 'string' && raw.excludes.length > 0
+      ? raw.excludes
+      : 'allocator metadata and runtime overhead';
 
     return {
       heapBytes,
+      accountedBytes,
+      estimatedOverheadBytes,
       nativeRssBytes,
-      totalBytes
+      totalBytes,
+      includes,
+      excludes
     };
   }
 

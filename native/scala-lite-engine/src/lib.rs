@@ -1,6 +1,6 @@
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 
 #[cfg(feature = "napi")]
@@ -42,8 +42,12 @@ pub struct DiagnosticEntry {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemoryUsage {
     pub heap_bytes: u64,
+    pub accounted_bytes: u64,
+    pub estimated_overhead_bytes: u64,
     pub native_rss_bytes: u64,
     pub total_bytes: u64,
+    pub includes: String,
+    pub excludes: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,10 +67,181 @@ pub struct FileInput {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct IndexSnapshot {
-    pub by_symbol: HashMap<String, Vec<SymbolEntry>>,
-    pub diagnostics_by_file: HashMap<String, Vec<DiagnosticEntry>>,
-    pub imports_by_file: HashMap<String, Vec<ImportEntry>>,
-    pub package_by_file: HashMap<String, String>,
+    pub by_symbol: HashMap<u32, Vec<InternedSymbolEntry>>,
+    pub diagnostics_by_file: HashMap<u32, Vec<InternedDiagnosticEntry>>,
+    pub imports_by_file: HashMap<u32, Vec<InternedImportEntry>>,
+    pub package_by_file: HashMap<u32, u32>,
+    pub string_interner: StringInterner,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct StringInterner {
+    pub strings: Vec<String>,
+    pub lookup: HashMap<String, u32>,
+}
+
+impl StringInterner {
+    fn intern(&mut self, value: &str) -> u32 {
+        if let Some(existing) = self.lookup.get(value) {
+            return *existing;
+        }
+
+        let id = self.strings.len() as u32;
+        let owned = value.to_string();
+        self.strings.push(owned.clone());
+        self.lookup.insert(owned, id);
+        id
+    }
+
+    fn resolve(&self, id: u32) -> Option<&str> {
+        self.strings.get(id as usize).map(String::as_str)
+    }
+
+    fn lookup_id(&self, value: &str) -> Option<u32> {
+        self.lookup.get(value).copied()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum InternedSymbolKind {
+    Package = 0,
+    Object = 1,
+    Class = 2,
+    Trait = 3,
+    Enum = 4,
+    Def = 5,
+    Val = 6,
+    Var = 7,
+    Type = 8,
+    Given = 9,
+    Param = 10,
+    Unknown = 255,
+}
+
+impl InternedSymbolKind {
+    fn from_wire(kind: &str) -> Self {
+        match kind {
+            "package" => Self::Package,
+            "object" => Self::Object,
+            "class" => Self::Class,
+            "trait" => Self::Trait,
+            "enum" => Self::Enum,
+            "def" => Self::Def,
+            "val" => Self::Val,
+            "var" => Self::Var,
+            "type" => Self::Type,
+            "given" => Self::Given,
+            "param" => Self::Param,
+            _ => Self::Unknown,
+        }
+    }
+
+    fn as_wire(self) -> &'static str {
+        match self {
+            Self::Package => "package",
+            Self::Object => "object",
+            Self::Class => "class",
+            Self::Trait => "trait",
+            Self::Enum => "enum",
+            Self::Def => "def",
+            Self::Val => "val",
+            Self::Var => "var",
+            Self::Type => "type",
+            Self::Given => "given",
+            Self::Param => "param",
+            Self::Unknown => "def",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum InternedVisibility {
+    Public = 0,
+    Protected = 1,
+    Private = 2,
+    Unknown = 255,
+}
+
+impl InternedVisibility {
+    fn from_wire(visibility: &str) -> Self {
+        match visibility {
+            "public" => Self::Public,
+            "protected" => Self::Protected,
+            "private" => Self::Private,
+            _ => Self::Unknown,
+        }
+    }
+
+    fn as_wire(self) -> &'static str {
+        match self {
+            Self::Public => "public",
+            Self::Protected => "protected",
+            Self::Private => "private",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InternedSymbolEntry {
+    pub name_id: u32,
+    pub kind: InternedSymbolKind,
+    pub file_path_id: u32,
+    pub line_number: u32,
+    pub container_name_id: Option<u32>,
+    pub package_name_id: u32,
+    pub visibility: InternedVisibility,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum InternedDiagnosticSeverity {
+    Error = 0,
+    Warning = 1,
+    Info = 2,
+    Hint = 3,
+    Unknown = 255,
+}
+
+impl InternedDiagnosticSeverity {
+    fn from_wire(severity: &str) -> Self {
+        match severity {
+            "error" => Self::Error,
+            "warning" => Self::Warning,
+            "information" => Self::Info,
+            "hint" => Self::Hint,
+            _ => Self::Unknown,
+        }
+    }
+
+    fn as_wire(self) -> &'static str {
+        match self {
+            Self::Error => "error",
+            Self::Warning => "warning",
+            Self::Info => "information",
+            Self::Hint => "hint",
+            Self::Unknown => "error",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InternedDiagnosticEntry {
+    pub line_number: u32,
+    pub column: u32,
+    pub severity: InternedDiagnosticSeverity,
+    pub message_id: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InternedImportEntry {
+    pub package_path_id: u32,
+    pub imported_name_id: Option<u32>,
+    pub source_symbol_name_id: Option<u32>,
+    pub is_wildcard: bool,
+    pub line_number: u32,
 }
 
 #[derive(Debug, Error)]
@@ -477,6 +652,223 @@ pub fn parse_file(file_path: &str, content: &str) -> Result<ParseFileResult, Eng
 }
 
 pub fn index_files(files: &[FileInput]) -> Result<IndexSnapshot, EngineError> {
+    let mut snapshot = IndexSnapshot::default();
+    append_files(&mut snapshot, files)?;
+    Ok(snapshot)
+}
+
+fn evict_file_from_snapshot(index: &mut IndexSnapshot, file_path: &str) {
+    if let Some(file_path_id) = index.string_interner.lookup_id(file_path) {
+        index
+            .by_symbol
+            .values_mut()
+            .for_each(|entries| entries.retain(|entry| entry.file_path_id != file_path_id));
+        index.by_symbol.retain(|_, entries| !entries.is_empty());
+
+        index.diagnostics_by_file.remove(&file_path_id);
+        index.imports_by_file.remove(&file_path_id);
+        index.package_by_file.remove(&file_path_id);
+
+        if index.by_symbol.is_empty()
+            && index.diagnostics_by_file.is_empty()
+            && index.imports_by_file.is_empty()
+            && index.package_by_file.is_empty()
+        {
+            index.string_interner.strings.clear();
+            index.string_interner.lookup.clear();
+            return;
+        }
+
+        compact_string_interner(index);
+    }
+}
+
+fn compact_string_interner(index: &mut IndexSnapshot) {
+    let mut used: HashSet<u32> = HashSet::new();
+
+    for (name_id, entries) in &index.by_symbol {
+        used.insert(*name_id);
+        for entry in entries {
+            used.insert(entry.file_path_id);
+            if let Some(container_name_id) = entry.container_name_id {
+                used.insert(container_name_id);
+            }
+            used.insert(entry.package_name_id);
+        }
+    }
+
+    for (file_id, entries) in &index.diagnostics_by_file {
+        used.insert(*file_id);
+        for entry in entries {
+            used.insert(entry.message_id);
+        }
+    }
+
+    for (file_id, entries) in &index.imports_by_file {
+        used.insert(*file_id);
+        for entry in entries {
+            used.insert(entry.package_path_id);
+            if let Some(imported_name_id) = entry.imported_name_id {
+                used.insert(imported_name_id);
+            }
+            if let Some(source_symbol_name_id) = entry.source_symbol_name_id {
+                used.insert(source_symbol_name_id);
+            }
+        }
+    }
+
+    for (file_id, package_id) in &index.package_by_file {
+        used.insert(*file_id);
+        used.insert(*package_id);
+    }
+
+    if used.is_empty() {
+        index.string_interner.strings.clear();
+        index.string_interner.lookup.clear();
+        return;
+    }
+
+    let mut used_sorted: Vec<u32> = used.into_iter().collect();
+    used_sorted.sort_unstable();
+
+    let mut id_map: HashMap<u32, u32> = HashMap::new();
+    let mut new_strings: Vec<String> = Vec::with_capacity(used_sorted.len());
+    for old_id in used_sorted {
+        if let Some(value) = index.string_interner.resolve(old_id) {
+            let new_id = new_strings.len() as u32;
+            new_strings.push(value.to_string());
+            id_map.insert(old_id, new_id);
+        }
+    }
+
+    let mut new_lookup: HashMap<String, u32> = HashMap::with_capacity(new_strings.len());
+    for (new_id, value) in new_strings.iter().enumerate() {
+        new_lookup.insert(value.clone(), new_id as u32);
+    }
+
+    let remap = |id: u32, id_map: &HashMap<u32, u32>| -> Option<u32> { id_map.get(&id).copied() };
+
+    let mut new_by_symbol: HashMap<u32, Vec<InternedSymbolEntry>> =
+        HashMap::with_capacity(index.by_symbol.len());
+    for (old_name_id, entries) in &index.by_symbol {
+        let new_name_id = match remap(*old_name_id, &id_map) {
+            Some(value) => value,
+            None => continue,
+        };
+
+        let mut remapped_entries: Vec<InternedSymbolEntry> = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let Some(file_path_id) = remap(entry.file_path_id, &id_map) else {
+                continue;
+            };
+            let package_name_id = match remap(entry.package_name_id, &id_map) {
+                Some(value) => value,
+                None => continue,
+            };
+            let container_name_id = entry.container_name_id.and_then(|id| remap(id, &id_map));
+
+            remapped_entries.push(InternedSymbolEntry {
+                name_id: new_name_id,
+                kind: entry.kind,
+                file_path_id,
+                line_number: entry.line_number,
+                container_name_id,
+                package_name_id,
+                visibility: entry.visibility,
+            });
+        }
+
+        if !remapped_entries.is_empty() {
+            new_by_symbol.insert(new_name_id, remapped_entries);
+        }
+    }
+
+    let mut new_diagnostics_by_file: HashMap<u32, Vec<InternedDiagnosticEntry>> =
+        HashMap::with_capacity(index.diagnostics_by_file.len());
+    for (old_file_id, entries) in &index.diagnostics_by_file {
+        let Some(new_file_id) = remap(*old_file_id, &id_map) else {
+            continue;
+        };
+        let mut remapped_entries: Vec<InternedDiagnosticEntry> = Vec::with_capacity(entries.len());
+
+        for entry in entries {
+            let Some(message_id) = remap(entry.message_id, &id_map) else {
+                continue;
+            };
+            remapped_entries.push(InternedDiagnosticEntry {
+                line_number: entry.line_number,
+                column: entry.column,
+                severity: entry.severity,
+                message_id,
+            });
+        }
+
+        if !remapped_entries.is_empty() {
+            new_diagnostics_by_file.insert(new_file_id, remapped_entries);
+        }
+    }
+
+    let mut new_imports_by_file: HashMap<u32, Vec<InternedImportEntry>> =
+        HashMap::with_capacity(index.imports_by_file.len());
+    for (old_file_id, entries) in &index.imports_by_file {
+        let Some(new_file_id) = remap(*old_file_id, &id_map) else {
+            continue;
+        };
+        let mut remapped_entries: Vec<InternedImportEntry> = Vec::with_capacity(entries.len());
+
+        for entry in entries {
+            let Some(package_path_id) = remap(entry.package_path_id, &id_map) else {
+                continue;
+            };
+            let imported_name_id = entry.imported_name_id.and_then(|id| remap(id, &id_map));
+            let source_symbol_name_id = entry
+                .source_symbol_name_id
+                .and_then(|id| remap(id, &id_map));
+
+            remapped_entries.push(InternedImportEntry {
+                package_path_id,
+                imported_name_id,
+                source_symbol_name_id,
+                is_wildcard: entry.is_wildcard,
+                line_number: entry.line_number,
+            });
+        }
+
+        if !remapped_entries.is_empty() {
+            new_imports_by_file.insert(new_file_id, remapped_entries);
+        }
+    }
+
+    let mut new_package_by_file: HashMap<u32, u32> =
+        HashMap::with_capacity(index.package_by_file.len());
+    for (old_file_id, old_package_id) in &index.package_by_file {
+        if let (Some(new_file_id), Some(new_package_id)) = (
+            remap(*old_file_id, &id_map),
+            remap(*old_package_id, &id_map),
+        ) {
+            new_package_by_file.insert(new_file_id, new_package_id);
+        }
+    }
+
+    index.by_symbol = new_by_symbol;
+    index.diagnostics_by_file = new_diagnostics_by_file;
+    index.imports_by_file = new_imports_by_file;
+    index.package_by_file = new_package_by_file;
+    index.string_interner = StringInterner {
+        strings: new_strings,
+        lookup: new_lookup,
+    };
+}
+
+fn current_symbol_total(index: &IndexSnapshot) -> u32 {
+    index
+        .by_symbol
+        .values()
+        .map(std::vec::Vec::len)
+        .sum::<usize>() as u32
+}
+
+pub fn append_files(index: &mut IndexSnapshot, files: &[FileInput]) -> Result<u32, EngineError> {
     let parsed: Result<Vec<ParseFileResult>, EngineError> = files
         .par_iter()
         .map(|file| parse_file(&file.file_path, &file.content))
@@ -484,17 +876,33 @@ pub fn index_files(files: &[FileInput]) -> Result<IndexSnapshot, EngineError> {
 
     let parsed = parsed?;
 
-    let mut by_symbol: HashMap<String, Vec<SymbolEntry>> = HashMap::new();
-    let mut diagnostics_by_file: HashMap<String, Vec<DiagnosticEntry>> = HashMap::new();
-    let mut imports_by_file: HashMap<String, Vec<ImportEntry>> = HashMap::new();
-    let mut package_by_file: HashMap<String, String> = HashMap::new();
-
     for file_result in parsed {
+        evict_file_from_snapshot(index, &file_result.file_path);
+
+        let file_path_id = index.string_interner.intern(&file_result.file_path);
+
         for import in file_result.imports {
-            imports_by_file
-                .entry(import.file_path.clone())
+            let package_path_id = index.string_interner.intern(&import.package_path);
+            let imported_name_id = import
+                .imported_name
+                .as_deref()
+                .map(|value| index.string_interner.intern(value));
+            let source_symbol_name_id = import
+                .source_symbol_name
+                .as_deref()
+                .map(|value| index.string_interner.intern(value));
+
+            index
+                .imports_by_file
+                .entry(file_path_id)
                 .or_default()
-                .push(import);
+                .push(InternedImportEntry {
+                    package_path_id,
+                    imported_name_id,
+                    source_symbol_name_id,
+                    is_wildcard: import.is_wildcard,
+                    line_number: import.line_number,
+                });
         }
 
         if let Some(package_symbol) = file_result
@@ -502,32 +910,111 @@ pub fn index_files(files: &[FileInput]) -> Result<IndexSnapshot, EngineError> {
             .iter()
             .find(|entry| entry.kind == "package")
         {
-            package_by_file.insert(
-                file_result.file_path.clone(),
-                package_symbol.package_name.clone(),
-            );
+            let package_name_id = index.string_interner.intern(&package_symbol.package_name);
+            index.package_by_file.insert(file_path_id, package_name_id);
         }
 
         for symbol in file_result.symbols {
-            by_symbol
-                .entry(symbol.name.clone())
-                .or_default()
-                .push(symbol);
+            let name_id = index.string_interner.intern(&symbol.name);
+            let package_name_id = index.string_interner.intern(&symbol.package_name);
+            let container_name_id = symbol
+                .container_name
+                .as_deref()
+                .map(|value| index.string_interner.intern(value));
+
+            let entry = InternedSymbolEntry {
+                name_id,
+                kind: InternedSymbolKind::from_wire(&symbol.kind),
+                file_path_id,
+                line_number: symbol.line_number,
+                container_name_id,
+                package_name_id,
+                visibility: InternedVisibility::from_wire(&symbol.visibility),
+            };
+
+            index.by_symbol.entry(name_id).or_default().push(entry);
         }
 
         for diagnostic in file_result.diagnostics {
-            diagnostics_by_file
-                .entry(diagnostic.file_path.clone())
+            let message_id = index.string_interner.intern(&diagnostic.message);
+            index
+                .diagnostics_by_file
+                .entry(file_path_id)
                 .or_default()
-                .push(diagnostic);
+                .push(InternedDiagnosticEntry {
+                    line_number: diagnostic.line_number,
+                    column: diagnostic.column,
+                    severity: InternedDiagnosticSeverity::from_wire(&diagnostic.severity),
+                    message_id,
+                });
         }
     }
 
-    Ok(IndexSnapshot {
-        by_symbol,
-        diagnostics_by_file,
-        imports_by_file,
-        package_by_file,
+    Ok(current_symbol_total(index))
+}
+
+fn materialize_symbol_entry(
+    index: &IndexSnapshot,
+    entry: &InternedSymbolEntry,
+) -> Option<SymbolEntry> {
+    let name = index.string_interner.resolve(entry.name_id)?.to_string();
+    let file_path = index
+        .string_interner
+        .resolve(entry.file_path_id)?
+        .to_string();
+    let package_name = index
+        .string_interner
+        .resolve(entry.package_name_id)?
+        .to_string();
+    let container_name = entry
+        .container_name_id
+        .and_then(|id| index.string_interner.resolve(id).map(str::to_string));
+
+    Some(SymbolEntry {
+        name,
+        kind: entry.kind.as_wire().to_string(),
+        file_path,
+        line_number: entry.line_number,
+        container_name,
+        package_name,
+        visibility: entry.visibility.as_wire().to_string(),
+    })
+}
+
+fn materialize_diagnostic_entry(
+    index: &IndexSnapshot,
+    file_path: &str,
+    entry: &InternedDiagnosticEntry,
+) -> Option<DiagnosticEntry> {
+    Some(DiagnosticEntry {
+        file_path: file_path.to_string(),
+        line_number: entry.line_number,
+        column: entry.column,
+        severity: entry.severity.as_wire().to_string(),
+        message: index.string_interner.resolve(entry.message_id)?.to_string(),
+    })
+}
+
+#[allow(dead_code)]
+fn materialize_import_entry(
+    index: &IndexSnapshot,
+    file_path: &str,
+    entry: &InternedImportEntry,
+) -> Option<ImportEntry> {
+    Some(ImportEntry {
+        file_path: file_path.to_string(),
+        package_path: index
+            .string_interner
+            .resolve(entry.package_path_id)?
+            .to_string(),
+        imported_name: entry
+            .imported_name_id
+            .and_then(|id| index.string_interner.resolve(id).map(str::to_string)),
+        source_symbol_name: entry
+            .source_symbol_name_id
+            .and_then(|id| index.string_interner.resolve(id).map(str::to_string)),
+        is_wildcard: entry.is_wildcard,
+        line_number: entry.line_number,
     })
 }
 
@@ -541,14 +1028,18 @@ pub fn query_symbols_in_package(
         return Ok(Vec::new());
     }
 
-    let mut matched: Vec<SymbolEntry> = index
+    let Some(query_id) = index.string_interner.lookup_id(query) else {
+        return Ok(Vec::new());
+    };
+
+    let mut matched = index
         .by_symbol
-        .get(query)
-        .cloned()
-        .unwrap_or_default()
+        .get(&query_id)
         .into_iter()
+        .flat_map(|entries| entries.iter())
+        .filter_map(|entry| materialize_symbol_entry(index, entry))
         .filter(|entry| entry.package_name == package_path)
-        .collect();
+        .collect::<Vec<_>>();
 
     matched.sort_by(compare_symbol_entries);
     Ok(matched.into_iter().take(limit.max(1)).collect())
@@ -560,9 +1051,13 @@ pub fn query_package_exists(index: &IndexSnapshot, package_path: &str) -> bool {
     }
 
     index.by_symbol.values().any(|entries| {
-        entries
-            .iter()
-            .any(|entry| entry.package_name == package_path)
+        entries.iter().any(|entry| {
+            index
+                .string_interner
+                .resolve(entry.package_name_id)
+                .map(|value| value == package_path)
+                .unwrap_or(false)
+        })
     })
 }
 
@@ -577,20 +1072,29 @@ pub fn query_symbols(
 
     let capped_limit = limit.max(1);
 
-    if let Some(exact_entries) = index.by_symbol.get(query) {
-        let mut sorted = exact_entries.clone();
-        sorted.sort_by(compare_symbol_entries);
-        return Ok(sorted.into_iter().take(capped_limit).collect());
+    if let Some(query_id) = index.string_interner.lookup_id(query) {
+        if let Some(exact_entries) = index.by_symbol.get(&query_id) {
+            let mut sorted = exact_entries
+                .iter()
+                .filter_map(|entry| materialize_symbol_entry(index, entry))
+                .collect::<Vec<_>>();
+            sorted.sort_by(compare_symbol_entries);
+            return Ok(sorted.into_iter().take(capped_limit).collect());
+        }
     }
 
     let mut ranked_buckets: Vec<(i32, String, Vec<SymbolEntry>)> = index
         .by_symbol
         .iter()
-        .filter_map(|(name, entries)| {
+        .filter_map(|(name_id, entries)| {
+            let name = index.string_interner.resolve(*name_id)?;
             fuzzy_score(query, name).map(|score| {
-                let mut sorted_entries = entries.clone();
+                let mut sorted_entries = entries
+                    .iter()
+                    .filter_map(|entry| materialize_symbol_entry(index, entry))
+                    .collect::<Vec<_>>();
                 sorted_entries.sort_by(compare_symbol_entries);
-                (score, name.clone(), sorted_entries)
+                (score, name.to_string(), sorted_entries)
             })
         })
         .collect();
@@ -632,29 +1136,71 @@ pub fn get_diagnostics(
     if file_path.trim().is_empty() {
         return Err(EngineError::EmptyFilePath);
     }
+    let Some(file_path_id) = index.string_interner.lookup_id(file_path) else {
+        return Ok(Vec::new());
+    };
 
     Ok(index
         .diagnostics_by_file
-        .get(file_path)
-        .cloned()
-        .unwrap_or_default())
+        .get(&file_path_id)
+        .into_iter()
+        .flat_map(|entries| entries.iter())
+        .filter_map(|entry| materialize_diagnostic_entry(index, file_path, entry))
+        .collect())
 }
 
 pub fn get_memory_usage(index: &IndexSnapshot) -> Result<MemoryUsage, EngineError> {
-    let symbol_count: usize = index.by_symbol.values().map(std::vec::Vec::len).sum();
-    let diagnostic_count: usize = index
-        .diagnostics_by_file
-        .values()
-        .map(std::vec::Vec::len)
-        .sum();
+    fn map_bucket_overhead<K, V>(map: &HashMap<K, V>) -> u64 {
+        (map.capacity() * std::mem::size_of::<(K, V)>()) as u64
+    }
 
-    let native_rss_bytes = ((symbol_count * 64) + (diagnostic_count * 96)) as u64;
+    fn string_allocated_bytes(value: &String) -> u64 {
+        value.capacity() as u64
+    }
+
+    let mut accounted_bytes = 0u64;
+
+    accounted_bytes += map_bucket_overhead(&index.by_symbol);
+    for entries in index.by_symbol.values() {
+        accounted_bytes += (entries.capacity() * std::mem::size_of::<InternedSymbolEntry>()) as u64;
+    }
+
+    accounted_bytes +=
+        (index.string_interner.strings.capacity() * std::mem::size_of::<String>()) as u64;
+    accounted_bytes +=
+        (index.string_interner.lookup.capacity() * std::mem::size_of::<(String, u32)>()) as u64;
+    for value in &index.string_interner.strings {
+        accounted_bytes += string_allocated_bytes(value);
+    }
+    for key in index.string_interner.lookup.keys() {
+        accounted_bytes += string_allocated_bytes(key);
+    }
+
+    accounted_bytes += map_bucket_overhead(&index.diagnostics_by_file);
+    for diagnostics in index.diagnostics_by_file.values() {
+        accounted_bytes +=
+            (diagnostics.capacity() * std::mem::size_of::<InternedDiagnosticEntry>()) as u64;
+    }
+
+    accounted_bytes += map_bucket_overhead(&index.imports_by_file);
+    for imports in index.imports_by_file.values() {
+        accounted_bytes += (imports.capacity() * std::mem::size_of::<InternedImportEntry>()) as u64;
+    }
+
+    accounted_bytes += map_bucket_overhead(&index.package_by_file);
+
+    let estimated_overhead_bytes = accounted_bytes / 5;
+    let native_rss_bytes = accounted_bytes + estimated_overhead_bytes;
     let heap_bytes = 0u64;
 
     Ok(MemoryUsage {
         heap_bytes,
+        accounted_bytes,
+        estimated_overhead_bytes,
         native_rss_bytes,
         total_bytes: heap_bytes + native_rss_bytes,
+        includes: "interned symbol entries, string table, diagnostic entries, import entries, package map, HashMap bucket arrays".to_string(),
+        excludes: "allocator metadata, fragmentation beyond estimate, thread-local caches, stack usage".to_string(),
     })
 }
 
@@ -749,12 +1295,74 @@ val publicValue = 42
         sorted.sort();
         assert_eq!(file_paths, sorted);
     }
+
+    #[test]
+    fn get_memory_usage_reports_non_zero_for_non_empty_index() {
+        let files = vec![FileInput {
+            file_path: "/tmp/a.scala".to_string(),
+            content: "package demo\nclass User\n".to_string(),
+        }];
+
+        let index = index_files(&files).expect("index_files should succeed");
+        let usage = get_memory_usage(&index).expect("get_memory_usage should succeed");
+
+        assert!(usage.accounted_bytes > 0);
+        assert!(usage.native_rss_bytes >= usage.accounted_bytes);
+        assert!(!usage.includes.is_empty());
+        assert!(!usage.excludes.is_empty());
+    }
+
+    #[test]
+    fn get_diagnostics_materializes_from_interned_storage() {
+        let files = vec![FileInput {
+            file_path: "/tmp/a.scala".to_string(),
+            content: "object Demo {\n  def broken( = 1\n}\n".to_string(),
+        }];
+
+        let index = index_files(&files).expect("index_files should succeed");
+        let diagnostics =
+            get_diagnostics(&index, "/tmp/a.scala").expect("get_diagnostics should succeed");
+
+        assert!(!diagnostics.is_empty());
+        assert!(diagnostics
+            .iter()
+            .any(|entry| { entry.file_path == "/tmp/a.scala" && entry.severity == "error" }));
+    }
+
+    #[test]
+    fn evict_compacts_string_interner_after_removal() {
+        let files = vec![
+            FileInput {
+                file_path: "/tmp/a.scala".to_string(),
+                content: "package demo\nclass A\n".to_string(),
+            },
+            FileInput {
+                file_path: "/tmp/b.scala".to_string(),
+                content: "package demo\nclass B\n".to_string(),
+            },
+        ];
+
+        let mut index = index_files(&files).expect("index_files should succeed");
+        let initial_string_count = index.string_interner.strings.len();
+
+        evict_file_from_snapshot(&mut index, "/tmp/a.scala");
+
+        // Ensure the remaining file is still indexed and interner compacted.
+        let remaining = query_symbols(&index, "B", 10).expect("query_symbols should succeed");
+        assert_eq!(remaining.len(), 1);
+        assert!(remaining
+            .iter()
+            .all(|entry| entry.file_path == "/tmp/b.scala"));
+
+        let after_evict_count = index.string_interner.strings.len();
+        assert!(after_evict_count < initial_string_count);
+    }
 }
 
 #[cfg(feature = "napi")]
 mod napi_bridge {
     use super::{
-        get_diagnostics, get_memory_usage, index_files, parse_file, query_package_exists,
+        append_files, get_diagnostics, get_memory_usage, parse_file, query_package_exists,
         query_symbols, query_symbols_in_package, DiagnosticEntry, FileInput, IndexSnapshot,
         MemoryUsage, ParseFileResult, SymbolEntry,
     };
@@ -771,8 +1379,12 @@ mod napi_bridge {
     #[napi(object)]
     pub struct JsMemoryUsage {
         pub heap_bytes: i64,
+        pub accounted_bytes: i64,
+        pub estimated_overhead_bytes: i64,
         pub native_rss_bytes: i64,
         pub total_bytes: i64,
+        pub includes: String,
+        pub excludes: String,
     }
 
     #[napi]
@@ -804,19 +1416,41 @@ mod napi_bridge {
                 })
                 .collect();
 
-            let snapshot =
-                index_files(&mapped).map_err(|error| Error::from_reason(error.to_string()))?;
-            let symbol_total = snapshot
-                .by_symbol
-                .values()
-                .map(std::vec::Vec::len)
-                .sum::<usize>() as u32;
             let mut guard = self
                 .inner
                 .lock()
                 .map_err(|_| Error::from_reason("engine lock poisoned".to_string()))?;
-            *guard = snapshot;
+            *guard = IndexSnapshot::default();
+            let symbol_total = append_files(&mut guard, &mapped)
+                .map_err(|error| Error::from_reason(error.to_string()))?;
             Ok(symbol_total)
+        }
+
+        #[napi]
+        pub fn append_files(&self, files: Vec<JsFileInput>) -> Result<u32> {
+            let mapped: Vec<FileInput> = files
+                .into_iter()
+                .map(|file| FileInput {
+                    file_path: file.file_path,
+                    content: file.content,
+                })
+                .collect();
+
+            let mut guard = self
+                .inner
+                .lock()
+                .map_err(|_| Error::from_reason("engine lock poisoned".to_string()))?;
+            append_files(&mut guard, &mapped).map_err(|error| Error::from_reason(error.to_string()))
+        }
+
+        #[napi]
+        pub fn clear_index(&self) -> Result<()> {
+            let mut guard = self
+                .inner
+                .lock()
+                .map_err(|_| Error::from_reason("engine lock poisoned".to_string()))?;
+            *guard = IndexSnapshot::default();
+            Ok(())
         }
 
         #[napi]
@@ -870,13 +1504,7 @@ mod napi_bridge {
                 .lock()
                 .map_err(|_| Error::from_reason("engine lock poisoned".to_string()))?;
 
-            guard
-                .by_symbol
-                .values_mut()
-                .for_each(|entries| entries.retain(|entry| entry.file_path != file_path));
-            guard.diagnostics_by_file.remove(&file_path);
-            guard.imports_by_file.remove(&file_path);
-            guard.package_by_file.remove(&file_path);
+            super::evict_file_from_snapshot(&mut guard, &file_path);
             Ok(())
         }
 
@@ -896,8 +1524,13 @@ mod napi_bridge {
                 get_memory_usage(&guard).map_err(|error| Error::from_reason(error.to_string()))?;
             Ok(JsMemoryUsage {
                 heap_bytes: usage.heap_bytes.min(i64::MAX as u64) as i64,
+                accounted_bytes: usage.accounted_bytes.min(i64::MAX as u64) as i64,
+                estimated_overhead_bytes: usage.estimated_overhead_bytes.min(i64::MAX as u64)
+                    as i64,
                 native_rss_bytes: usage.native_rss_bytes.min(i64::MAX as u64) as i64,
                 total_bytes: usage.total_bytes.min(i64::MAX as u64) as i64,
+                includes: usage.includes,
+                excludes: usage.excludes,
             })
         }
 

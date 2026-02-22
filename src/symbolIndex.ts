@@ -2,10 +2,12 @@ import * as vscode from 'vscode';
 import { Minimatch } from 'minimatch';
 import { StructuredLogger } from './structuredLogger';
 import { WorkspaceMode } from './modePresentation';
-import { readModuleFolderFromWorkspaceConfig } from './workspaceConfig';
+import { readIndexBatchSizeFromWorkspaceConfig, readModuleFolderFromWorkspaceConfig } from './workspaceConfig';
 import { resolveWorkspaceIgnoreRules } from './ignoreRules';
-import { NativeDiagnostic, NativeParseResult, NativeEngine } from './nativeEngine';
+import { NativeDiagnostic, NativeMemoryUsage, NativeParseResult, NativeEngine } from './nativeEngine';
 import { compareSymbols } from './symbolSort';
+import type { WorkspaceMemoryMetrics } from './memoryBudget';
+import { JsStringTable } from './jsStringTable';
 
 export const COMMAND_REBUILD_INDEX = 'scalaLite.rebuildIndex';
 
@@ -45,11 +47,23 @@ export interface ImportRecord {
   readonly lineNumber: number;
 }
 
+export interface MemoryBreakdown {
+  readonly fileCount: number;
+  readonly symbolCount: number;
+  readonly importCount: number;
+  readonly diagnosticCount: number;
+  readonly contentCacheBytes: number;
+  readonly estimatedJsHeapBytes: number;
+  readonly nativeMemoryUsage: NativeMemoryUsage;
+  readonly stringTableEntries?: number;
+  readonly stringTableBytes?: number;
+}
+
 function isIndexableFile(document: vscode.TextDocument): boolean {
   return document.fileName.endsWith('.scala') || document.fileName.endsWith('.sbt');
 }
 
-function extractSymbols(document: vscode.TextDocument): IndexedSymbol[] {
+function extractSymbolsFromContent(filePath: string, content: string): IndexedSymbol[] {
   const symbols: IndexedSymbol[] = [];
   let currentContainerName: string | undefined;
   let currentPackageName = '';
@@ -77,8 +91,10 @@ function extractSymbols(document: vscode.TextDocument): IndexedSymbol[] {
     return 'unknown';
   };
 
-  for (let index = 0; index < document.lineCount; index += 1) {
-    const line = document.lineAt(index).text;
+  const lines = content.split(/\r?\n/);
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
 
     const packageMatch = line.match(packageRegex);
     if (packageMatch) {
@@ -88,7 +104,7 @@ function extractSymbols(document: vscode.TextDocument): IndexedSymbol[] {
       symbols.push({
         symbolName: packageMatch[1],
         symbolKind: 'package',
-        filePath: document.uri.fsPath,
+        filePath,
         lineNumber: index + 1,
         packageName: currentPackageName,
         visibility: inferVisibility(line)
@@ -102,7 +118,7 @@ function extractSymbols(document: vscode.TextDocument): IndexedSymbol[] {
       symbols.push({
         symbolName: objectMatch[1],
         symbolKind: 'object',
-        filePath: document.uri.fsPath,
+        filePath,
         lineNumber: index + 1,
         packageName: currentPackageName,
         visibility: inferVisibility(line),
@@ -117,7 +133,7 @@ function extractSymbols(document: vscode.TextDocument): IndexedSymbol[] {
       symbols.push({
         symbolName: classMatch[1],
         symbolKind: 'class',
-        filePath: document.uri.fsPath,
+        filePath,
         lineNumber: index + 1,
         packageName: currentPackageName,
         visibility: inferVisibility(line),
@@ -131,7 +147,7 @@ function extractSymbols(document: vscode.TextDocument): IndexedSymbol[] {
       symbols.push({
         symbolName: traitMatch[1],
         symbolKind: 'trait',
-        filePath: document.uri.fsPath,
+        filePath,
         lineNumber: index + 1,
         packageName: currentPackageName,
         visibility: inferVisibility(line),
@@ -145,7 +161,7 @@ function extractSymbols(document: vscode.TextDocument): IndexedSymbol[] {
       symbols.push({
         symbolName: defMatch[1],
         symbolKind: 'def',
-        filePath: document.uri.fsPath,
+        filePath,
         lineNumber: index + 1,
         packageName: currentPackageName,
         visibility: inferVisibility(line),
@@ -159,7 +175,7 @@ function extractSymbols(document: vscode.TextDocument): IndexedSymbol[] {
       symbols.push({
         symbolName: valMatch[1],
         symbolKind: 'val',
-        filePath: document.uri.fsPath,
+        filePath,
         lineNumber: index + 1,
         packageName: currentPackageName,
         visibility: inferVisibility(line),
@@ -173,7 +189,7 @@ function extractSymbols(document: vscode.TextDocument): IndexedSymbol[] {
       symbols.push({
         symbolName: typeMatch[1],
         symbolKind: 'type',
-        filePath: document.uri.fsPath,
+        filePath,
         lineNumber: index + 1,
         packageName: currentPackageName,
         visibility: inferVisibility(line),
@@ -186,13 +202,15 @@ function extractSymbols(document: vscode.TextDocument): IndexedSymbol[] {
 }
 
 export class SymbolIndexManager implements vscode.Disposable {
+  private static readonly DEFAULT_NATIVE_SYNC_BATCH_SIZE = 100;
+  private readonly modeCRebuildCompletedEmitter = new vscode.EventEmitter<void>();
+  private readonly stringTable = new JsStringTable();
   private readonly logger: StructuredLogger;
   private readonly getNativeEngine: () => NativeEngine;
   private readonly indexByFile = new Map<string, IndexedSymbol[]>();
   private readonly diagnosticsByFile = new Map<string, NativeDiagnostic[]>();
   private readonly importsByFile = new Map<string, ImportRecord[]>();
   private readonly packageByFile = new Map<string, string>();
-  private readonly contentByFile = new Map<string, string>();
   private readonly fileCloseEvictionTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private currentMode: WorkspaceMode = 'A';
   private readonly disposables: vscode.Disposable[] = [];
@@ -202,6 +220,8 @@ export class SymbolIndexManager implements vscode.Disposable {
     this.logger = logger;
     this.getNativeEngine = getNativeEngine;
   }
+
+  public readonly onDidModeCRebuildCompleted: vscode.Event<void> = this.modeCRebuildCompletedEmitter.event;
 
   public initialize(context: vscode.ExtensionContext): void {
     const rebuildDisposable = vscode.commands.registerCommand(COMMAND_REBUILD_INDEX, async () => {
@@ -218,8 +238,9 @@ export class SymbolIndexManager implements vscode.Disposable {
         return;
       }
 
-      await this.indexDocument(document);
-      await this.syncNativeIndex();
+      const content = document.getText();
+      await this.indexFileContent(document.uri, content);
+      await this.appendNativeIndexBatch([{ filePath: document.uri.fsPath, content }]);
       this.logger.info('INDEX', `Incremental index update: ${document.uri.fsPath}`);
     });
 
@@ -228,8 +249,9 @@ export class SymbolIndexManager implements vscode.Disposable {
         return;
       }
 
-      await this.indexDocument(document);
-      await this.syncNativeIndex();
+      const content = document.getText();
+      await this.indexFileContent(document.uri, content);
+      await this.appendNativeIndexBatch([{ filePath: document.uri.fsPath, content }]);
     });
 
     const closeDisposable = vscode.workspace.onDidCloseTextDocument((document) => {
@@ -245,7 +267,6 @@ export class SymbolIndexManager implements vscode.Disposable {
 
       const evictionTimer = setTimeout(() => {
         this.indexByFile.delete(key);
-        this.contentByFile.delete(document.uri.fsPath);
         this.diagnosticsByFile.delete(document.uri.fsPath);
         this.importsByFile.delete(key);
         this.packageByFile.delete(document.uri.fsPath);
@@ -267,8 +288,9 @@ export class SymbolIndexManager implements vscode.Disposable {
       clearTimeout(timer);
     }
     this.fileCloseEvictionTimers.clear();
+    this.modeCRebuildCompletedEmitter.dispose();
+    this.stringTable.clear();
     this.indexByFile.clear();
-    this.contentByFile.clear();
     this.diagnosticsByFile.clear();
     this.importsByFile.clear();
     this.packageByFile.clear();
@@ -296,6 +318,138 @@ export class SymbolIndexManager implements vscode.Disposable {
 
   public getImportsForFile(documentUri: vscode.Uri): readonly ImportRecord[] {
     return this.importsByFile.get(documentUri.toString()) ?? [];
+  }
+
+  public getMemoryBudgetMetrics(): WorkspaceMemoryMetrics {
+    let symbolCount = 0;
+    for (const symbols of this.indexByFile.values()) {
+      symbolCount += symbols.length;
+    }
+
+    const openFileCount = vscode.workspace.textDocuments.filter((document) => isIndexableFile(document)).length;
+
+    return {
+      fileCount: this.indexByFile.size,
+      symbolCount,
+      openFileCount,
+      scalaLiteEstimatedHeapBytes: this.estimateScalaLiteHeapBytes()
+    };
+  }
+
+  public async getMemoryBreakdown(): Promise<MemoryBreakdown> {
+    const metrics = this.getMemoryBudgetMetrics();
+    const importCount = Array.from(this.importsByFile.values()).reduce((sum, imports) => sum + imports.length, 0);
+    const diagnosticCount = Array.from(this.diagnosticsByFile.values())
+      .reduce((sum, diagnostics) => sum + diagnostics.length, 0);
+
+    let nativeMemoryUsage: NativeMemoryUsage;
+    try {
+      nativeMemoryUsage = await this.getNativeEngine().getMemoryUsage();
+    } catch {
+      nativeMemoryUsage = {
+        heapBytes: 0,
+        accountedBytes: 0,
+        estimatedOverheadBytes: 0,
+        nativeRssBytes: 0,
+        totalBytes: 0,
+        includes: 'native memory unavailable',
+        excludes: 'native engine metrics unavailable'
+      };
+    }
+
+    return {
+      fileCount: metrics.fileCount,
+      symbolCount: metrics.symbolCount,
+      importCount,
+      diagnosticCount,
+      contentCacheBytes: 0,
+      estimatedJsHeapBytes: metrics.scalaLiteEstimatedHeapBytes,
+      nativeMemoryUsage,
+      stringTableEntries: this.stringTable.getStats().entryCount,
+      stringTableBytes: this.stringTable.getStats().estimatedByteSavings
+    };
+  }
+
+  private estimateScalaLiteHeapBytes(): number {
+    let estimatedBytes = 0;
+
+    for (const [fileKey, symbols] of this.indexByFile.entries()) {
+      estimatedBytes += this.estimateStringBytes(fileKey);
+      for (const symbol of symbols) {
+        estimatedBytes += this.estimateIndexedSymbolBytes(symbol);
+      }
+    }
+
+    for (const [fileKey, imports] of this.importsByFile.entries()) {
+      estimatedBytes += this.estimateStringBytes(fileKey);
+      for (const importEntry of imports) {
+        estimatedBytes += this.estimateImportRecordBytes(importEntry);
+      }
+    }
+
+    for (const [filePath, packageName] of this.packageByFile.entries()) {
+      estimatedBytes += this.estimateStringBytes(filePath);
+      estimatedBytes += this.estimateStringBytes(packageName);
+    }
+
+    for (const [filePath, diagnostics] of this.diagnosticsByFile.entries()) {
+      estimatedBytes += this.estimateStringBytes(filePath);
+      for (const diagnostic of diagnostics) {
+        estimatedBytes += this.estimateNativeDiagnosticBytes(diagnostic);
+      }
+    }
+
+    return Math.max(0, Math.round(estimatedBytes));
+  }
+
+  private estimateIndexedSymbolBytes(symbol: IndexedSymbol): number {
+    let bytes = this.estimateStringBytes(symbol.symbolName);
+    bytes += this.estimateStringBytes(symbol.symbolKind);
+    bytes += this.estimateStringBytes(symbol.filePath);
+    bytes += this.estimateNumberBytes();
+    bytes += this.estimateStringBytes(symbol.packageName);
+    bytes += this.estimateStringBytes(symbol.visibility);
+    if (symbol.containerName) {
+      bytes += this.estimateStringBytes(symbol.containerName);
+    }
+
+    return bytes;
+  }
+
+  private estimateImportRecordBytes(importRecord: ImportRecord): number {
+    let bytes = this.estimateStringBytes(importRecord.packagePath);
+    if (importRecord.importedName) {
+      bytes += this.estimateStringBytes(importRecord.importedName);
+    }
+    if (importRecord.sourceSymbolName) {
+      bytes += this.estimateStringBytes(importRecord.sourceSymbolName);
+    }
+    bytes += this.estimateBooleanBytes();
+    bytes += this.estimateNumberBytes();
+
+    return bytes;
+  }
+
+  private estimateNativeDiagnosticBytes(diagnostic: NativeDiagnostic): number {
+    let bytes = this.estimateStringBytes(diagnostic.filePath);
+    bytes += this.estimateNumberBytes();
+    bytes += this.estimateNumberBytes();
+    bytes += this.estimateStringBytes(diagnostic.severity);
+    bytes += this.estimateStringBytes(diagnostic.message);
+
+    return bytes;
+  }
+
+  private estimateStringBytes(value: string): number {
+    return Buffer.byteLength(value, 'utf8');
+  }
+
+  private estimateNumberBytes(): number {
+    return 8;
+  }
+
+  private estimateBooleanBytes(): number {
+    return 4;
   }
 
   public getSymbolsForPackage(packagePath: string): readonly IndexedSymbol[] {
@@ -423,8 +577,8 @@ export class SymbolIndexManager implements vscode.Disposable {
   }
 
   private async rebuild(token?: vscode.CancellationToken): Promise<void> {
+    this.stringTable.clear();
     this.indexByFile.clear();
-    this.contentByFile.clear();
     this.diagnosticsByFile.clear();
     this.importsByFile.clear();
     this.packageByFile.clear();
@@ -448,7 +602,7 @@ export class SymbolIndexManager implements vscode.Disposable {
         }
         await this.indexDocument(document, token);
       }
-      await this.syncNativeIndex(token);
+      await this.syncNativeIndexFromUris(openTextDocuments.map((document) => document.uri), token);
       this.logger.info('INDEX', `Mode B index rebuilt from ${openTextDocuments.length} open file(s).`);
       return;
     }
@@ -481,45 +635,94 @@ export class SymbolIndexManager implements vscode.Disposable {
       return !ignoreMatchers.some((matcher) => matcher.match(relativePath) || matcher.match(`${relativePath}/`));
     });
 
-    for (const fileUri of filteredFiles) {
-      if (token?.isCancellationRequested) {
-        this.logger.info('INDEX', 'Mode C index rebuild cancelled.');
-        return;
-      }
+    const batchSize = await readIndexBatchSizeFromWorkspaceConfig();
+    const totalBatches = Math.max(1, Math.ceil(filteredFiles.length / batchSize));
 
-      try {
-        const document = await vscode.workspace.openTextDocument(fileUri);
-        await this.indexDocument(document, token);
-      } catch {
+    await this.clearNativeIndex(token);
+
+    let cancelled = false;
+
+    await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: vscode.l10n.t('Scala Lite: Rebuilding index'),
+        cancellable: true
+      },
+      async (progress, progressToken) => {
+        for (let start = 0; start < filteredFiles.length; start += batchSize) {
+          if (token?.isCancellationRequested || progressToken.isCancellationRequested) {
+            this.logger.info('INDEX', 'Mode C index rebuild cancelled.');
+            cancelled = true;
+            return;
+          }
+
+          const batchNumber = Math.floor(start / batchSize) + 1;
+          progress.report({
+            message: vscode.l10n.t('Indexing batch {0}/{1}…', String(batchNumber), String(totalBatches))
+          });
+
+          const batch = filteredFiles.slice(start, start + batchSize);
+          const nativeBatch: Array<{ filePath: string; content: string }> = [];
+
+          for (const fileUri of batch) {
+            if (token?.isCancellationRequested || progressToken.isCancellationRequested) {
+              this.logger.info('INDEX', 'Mode C index rebuild cancelled.');
+              cancelled = true;
+              return;
+            }
+
+            try {
+              const content = await this.readFileContent(fileUri);
+              await this.indexFileContent(fileUri, content, token);
+              nativeBatch.push({ filePath: fileUri.fsPath, content });
+            } catch {
+            }
+          }
+
+          await this.appendNativeIndexBatch(nativeBatch, token);
+        }
       }
+    );
+
+    if (token?.isCancellationRequested || cancelled) {
+      this.logger.info('INDEX', 'Mode C index rebuild cancelled.');
+      return;
     }
 
-    await this.syncNativeIndex(token);
-
-    this.logger.debug('INDEX', `Mode C rebuild completed with ${this.contentByFile.size} file(s) loaded in memory.`);
+    this.logger.debug('INDEX', `Mode C rebuild completed with ${this.indexByFile.size} indexed file(s).`);
+    this.modeCRebuildCompletedEmitter.fire();
 
     this.logger.info('INDEX', `Mode C index rebuilt from ${filteredFiles.length} file(s).`);
   }
 
   private async indexDocument(document: vscode.TextDocument, token?: vscode.CancellationToken): Promise<void> {
-    const content = document.getText();
-    const parsed = await this.tryParseWithNative(document.uri.fsPath, content, token);
-    const symbols = (parsed?.symbols ?? extractSymbols(document)).filter((symbol) => isValidIndexedSymbol(symbol));
+    await this.indexFileContent(document.uri, document.getText(), token);
+  }
+
+  private async indexFileContent(fileUri: vscode.Uri, content: string, token?: vscode.CancellationToken): Promise<void> {
+    const parsed = await this.tryParseWithNative(fileUri.fsPath, content, token);
+    const symbols = (parsed?.symbols ?? extractSymbolsFromContent(fileUri.fsPath, content))
+      .filter((symbol) => isValidIndexedSymbol(symbol))
+      .map((symbol) => ({
+        ...symbol,
+        filePath: this.stringTable.intern(symbol.filePath),
+        packageName: this.stringTable.intern(symbol.packageName),
+        containerName: symbol.containerName ? this.stringTable.intern(symbol.containerName) : undefined
+      }));
     const imports = parsed?.imports ?? [];
     this.logger.debug(
       'INDEX',
-      `Indexed ${document.uri.fsPath} with ${symbols.length} symbol(s) using ${parsed ? 'native' : 'typescript'} parser.`
+      `Indexed ${fileUri.fsPath} with ${symbols.length} symbol(s) using ${parsed ? 'native' : 'typescript'} parser.`
     );
-    this.indexByFile.set(document.uri.toString(), [...symbols]);
-    this.importsByFile.set(document.uri.toString(), [...imports]);
+    this.indexByFile.set(fileUri.toString(), [...symbols]);
+    this.importsByFile.set(fileUri.toString(), [...imports]);
     const packageSymbol = symbols.find((symbol) => symbol.symbolKind === 'package');
     if (packageSymbol) {
-      this.packageByFile.set(document.uri.fsPath, packageSymbol.packageName || packageSymbol.symbolName);
+      this.packageByFile.set(fileUri.fsPath, packageSymbol.packageName || packageSymbol.symbolName);
     } else {
-      this.packageByFile.delete(document.uri.fsPath);
+      this.packageByFile.delete(fileUri.fsPath);
     }
-    this.contentByFile.set(document.uri.fsPath, content);
-    this.diagnosticsByFile.set(document.uri.fsPath, [...(parsed?.diagnostics ?? [])]);
+    this.diagnosticsByFile.set(fileUri.fsPath, [...(parsed?.diagnostics ?? [])]);
   }
 
   private async tryParseWithNative(
@@ -540,23 +743,81 @@ export class SymbolIndexManager implements vscode.Disposable {
     }
   }
 
-  private async syncNativeIndex(token?: vscode.CancellationToken): Promise<void> {
+  private async syncNativeIndexFromUris(fileUris: readonly vscode.Uri[], token?: vscode.CancellationToken): Promise<void> {
     if (token?.isCancellationRequested) {
       return;
     }
 
-    const files = Array.from(this.contentByFile.entries()).map(([filePath, content]) => ({
-      filePath,
-      content
-    }));
+    await this.clearNativeIndex(token);
+
+    const configuredBatchSize = await readIndexBatchSizeFromWorkspaceConfig();
+    const batchSize = configuredBatchSize > 0
+      ? configuredBatchSize
+      : SymbolIndexManager.DEFAULT_NATIVE_SYNC_BATCH_SIZE;
+
+    for (let start = 0; start < fileUris.length; start += batchSize) {
+      if (token?.isCancellationRequested) {
+        return;
+      }
+
+      const batch = fileUris.slice(start, start + batchSize);
+      const nativeBatch: Array<{ filePath: string; content: string }> = [];
+
+      for (const fileUri of batch) {
+        if (token?.isCancellationRequested) {
+          this.logger.info('INDEX', 'Mode C index rebuild cancelled.');
+          return;
+        }
+
+        try {
+          const content = await this.readFileContent(fileUri);
+          nativeBatch.push({ filePath: fileUri.fsPath, content });
+        } catch {
+        }
+      }
+
+      await this.appendNativeIndexBatch(nativeBatch, token);
+    }
+  }
+
+  private async appendNativeIndexBatch(
+    files: readonly { filePath: string; content: string }[],
+    token?: vscode.CancellationToken
+  ): Promise<void> {
+    if (token?.isCancellationRequested || files.length === 0) {
+      return;
+    }
 
     try {
-      const total = await this.getNativeEngine().rebuildIndex(files, token);
-      this.logger.debug('INDEX', `Native index sync completed for ${files.length} file(s), ${total} symbol(s).`);
+      const total = await this.getNativeEngine().appendFiles(files, token);
+      this.logger.debug('INDEX', `Native append sync completed for ${files.length} file(s), ${total} symbol(s) total.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.warn('INDEX', `Native rebuild_index failed. Continuing with TypeScript index fallback. ${message}`);
+      this.logger.warn('INDEX', `Native append_files failed. Continuing with TypeScript index fallback. ${message}`);
     }
+  }
+
+  private async clearNativeIndex(token?: vscode.CancellationToken): Promise<void> {
+    if (token?.isCancellationRequested) {
+      return;
+    }
+
+    try {
+      await this.getNativeEngine().clearIndex(token);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn('INDEX', `Native clear_index failed. Continuing with TypeScript index fallback. ${message}`);
+    }
+  }
+
+  private async readFileContent(fileUri: vscode.Uri): Promise<string> {
+    const activeDocument = vscode.workspace.textDocuments.find((document) => document.uri.toString() === fileUri.toString());
+    if (activeDocument) {
+      return activeDocument.getText();
+    }
+
+    const bytes = await vscode.workspace.fs.readFile(fileUri);
+    return Buffer.from(bytes).toString('utf8');
   }
 
   private async evictFileFromNativeIndex(filePath: string): Promise<void> {

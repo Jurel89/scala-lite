@@ -170,6 +170,11 @@
         "command": "scalaLite.runMemoryBudgetAudit",
         "title": "%command.scalaLite.runMemoryBudgetAudit.title%",
         "category": "%commandCategory.scalaLite%"
+      },
+      {
+        "command": "scalaLite.memoryReport",
+        "title": "%command.scalaLite.memoryReport.title%",
+        "category": "%commandCategory.scalaLite%"
       }
     ],
     "configuration": {

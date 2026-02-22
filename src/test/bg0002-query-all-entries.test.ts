@@ -29,7 +29,7 @@ test('BG-0002: TypeScript fallback deterministic tie-breaker sorts by file and l
 test('BG-0002: Rust query_symbols uses exact bucket before fuzzy fallback and flattens deterministic entries', () => {
   const source = readSource('native/scala-lite-engine/src/lib.rs');
 
-  assert.equal(source.includes('if let Some(exact_entries) = index.by_symbol.get(query) {'), true);
+  assert.equal(source.includes('if let Some(query_id) = index.string_interner.lookup_id(query) {'), true);
   assert.equal(source.includes('sorted.sort_by(compare_symbol_entries);'), true);
   assert.equal(source.includes('let mut ranked_buckets: Vec<(i32, String, Vec<SymbolEntry>)> = index'), true);
   assert.equal(source.includes('.flat_map(|(_, _, entries)| entries)'), true);

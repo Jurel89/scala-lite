@@ -152,6 +152,12 @@
             "totalMb": {
               "type": "integer",
               "minimum": 1
+            },
+            "depsMb": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 256,
+              "description": "Maximum hot dependency index memory budget in megabytes."
             }
           },
           "additionalProperties": false

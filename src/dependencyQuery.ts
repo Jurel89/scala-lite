@@ -12,6 +12,55 @@ interface CachedClasspathPayload {
   readonly resolvedAt?: string;
 }
 
+let lastDependencyHotMemoryBytes = 0;
+
+function estimateStringBytes(value: string | undefined): number {
+  if (typeof value !== 'string') {
+    return 0;
+  }
+
+  return Buffer.byteLength(value, 'utf8');
+}
+
+function estimateStringArrayBytes(values: readonly string[] | undefined): number {
+  if (!Array.isArray(values)) {
+    return 0;
+  }
+
+  return values.reduce((sum, value) => sum + estimateStringBytes(value), 0);
+}
+
+function estimateClasspathPayloadBytes(payload: CachedClasspathPayload | undefined): number {
+  if (!payload) {
+    return 0;
+  }
+
+  let total = 0;
+  total += estimateStringBytes(payload.buildTool);
+  total += estimateStringArrayBytes(payload.jars);
+  total += estimateStringArrayBytes(payload.outputDirs);
+  total += estimateStringBytes(payload.resolvedAt);
+  total += 64;
+
+  return total;
+}
+
+function estimateAttachmentMapBytes(attachmentsByJar: ReadonlyMap<string, { readonly sourcesPath?: string }>): number {
+  let total = 0;
+
+  for (const [jarPath, attachment] of attachmentsByJar.entries()) {
+    total += estimateStringBytes(jarPath);
+    total += estimateStringBytes(attachment.sourcesPath);
+    total += 32;
+  }
+
+  return total;
+}
+
+export function getDependencyHotMemoryUsageBytes(): number {
+  return Math.max(0, Math.round(lastDependencyHotMemoryBytes));
+}
+
 function stripJarExtension(fileName: string): string {
   return fileName.endsWith('.jar') ? fileName.slice(0, -4) : fileName;
 }
@@ -77,6 +126,9 @@ export async function queryDependencySymbols(
 
   const payloads = await Promise.all(classpathFiles.map(async (uri) => readClasspathPayload(uri)));
   const attachmentsByJar = await readDependencyAttachmentsByJar(workspaceFolder);
+  lastDependencyHotMemoryBytes = payloads
+    .reduce((sum, payload) => sum + estimateClasspathPayloadBytes(payload), 0)
+    + estimateAttachmentMapBytes(attachmentsByJar);
   const symbols: IndexedSymbol[] = [];
 
   for (const payload of payloads) {

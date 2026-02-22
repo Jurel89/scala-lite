@@ -235,7 +235,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }
 
     const result = await auditMemoryBudgetForMode(activeMode, logger, symbolIndexManager.getMemoryBudgetMetrics());
-    const severeOverage = result.exceeded && result.totalUsedBytes > (result.maxTotalBytes * 1.5);
+    const severeOverage = result.exceeded && result.combinedUsedBytes > (result.combinedBudgetBytes * 1.5);
     if (!severeOverage) {
       return;
     }
@@ -254,9 +254,11 @@ export function activate(context: vscode.ExtensionContext): void {
 
     const picked = await vscode.window.showWarningMessage(
       vscode.l10n.t(
-        'Scala Lite memory usage ({0}MB) exceeds budget ({1}MB) for this workspace. Consider switching to Mode B or configuring a larger budget.',
-        toMb(result.totalUsedBytes),
-        toMb(result.maxTotalBytes)
+        'Scala Lite memory usage ({0}MB) exceeds budget ({1}MB) for this workspace (deps hot: {2}MB/{3}MB). Consider switching to Mode B or configuring a larger budget.',
+        toMb(result.combinedUsedBytes),
+        toMb(result.combinedBudgetBytes),
+        toMb(result.dependencyUsedBytes),
+        toMb(result.maxDependencyBytes)
       ),
       switchAction,
       increaseAction,

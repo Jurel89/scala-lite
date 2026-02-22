@@ -40,6 +40,7 @@ export interface MemoryBudgetOverrideConfig {
   readonly heapMb?: number;
   readonly nativeMb?: number;
   readonly totalMb?: number;
+  readonly depsMb?: number;
 }
 
 export interface EffectiveBudgetConfig {
@@ -404,7 +405,10 @@ export function buildDefaultWorkspaceConfig(buildTool: BuildTool = 'sbt'): Scala
       searchTimeMs: 2000,
       indexTimeMs: 5000,
       maxSearchResults: 500,
-      formatterTimeMs: 5000
+      formatterTimeMs: 5000,
+      memory: {
+        depsMb: 256
+      }
     },
     diagnostics: {
       enabled: true,
@@ -727,11 +731,10 @@ export async function readIndexBatchSizeFromWorkspaceConfig(): Promise<number> {
 
 export async function readMemoryBudgetOverridesFromWorkspaceConfig(): Promise<MemoryBudgetOverrideConfig> {
   const folder = getPrimaryWorkspaceFolder();
-  if (!folder) {
-    return {};
-  }
+  const settings = vscode.workspace.getConfiguration('scalaLite');
+  const settingsDepsMb = settings.get<number>('budgets.memory.depsMb');
 
-  const config = await readConfig(folder);
+  const config = folder ? await readConfig(folder) : {};
   const memory = config.budgets?.memory;
 
   const normalizeMb = (value: number | undefined): number | undefined => {
@@ -745,7 +748,8 @@ export async function readMemoryBudgetOverridesFromWorkspaceConfig(): Promise<Me
   return {
     heapMb: normalizeMb(memory?.heapMb),
     nativeMb: normalizeMb(memory?.nativeMb),
-    totalMb: normalizeMb(memory?.totalMb)
+    totalMb: normalizeMb(memory?.totalMb),
+    depsMb: normalizeMb(memory?.depsMb) ?? normalizeMb(settingsDepsMb)
   };
 }
 

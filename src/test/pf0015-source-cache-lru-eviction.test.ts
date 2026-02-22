@@ -31,8 +31,8 @@ test('PF-0015: sources cache enforces LRU eviction and emits structured WARN log
 test('PF-0015: fetch/read paths update cache usage timestamps for source artifacts', () => {
   const source = readSource('src/dependencyArtifacts.ts');
 
-  assert.equal(source.includes('cacheAttachmentArtifact(options.workspaceFolder, sourcesPathCandidate)'), true);
-  assert.equal(source.includes('cacheAttachmentArtifact(options.workspaceFolder, javadocPathCandidate)'), true);
+  assert.equal(source.includes('cacheAttachmentArtifact(options.workspaceFolder, sourcesPathCandidate, { enforceLru: false })'), true);
+  assert.equal(source.includes('cacheAttachmentArtifact(options.workspaceFolder, javadocPathCandidate, { enforceLru: false })'), true);
   assert.equal(source.includes('touchSourcesCacheEntry(workspaceFolder, entry.sourcesPath)'), true);
   assert.equal(source.includes('touchSourcesCacheEntry(workspaceFolder, entry.javadocPath)'), true);
 });

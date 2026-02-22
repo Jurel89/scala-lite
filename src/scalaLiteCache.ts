@@ -199,13 +199,14 @@ export async function pruneScalaLiteCacheSnapshots(
   const maxSnapshotsPerGroup = Math.max(1, options?.maxSnapshotsPerGroup ?? DEFAULT_MAX_SNAPSHOTS_PER_KEY);
   const maxTotalBytes = Math.max(1, options?.maxTotalBytes ?? DEFAULT_MAX_CACHE_BYTES);
   const snapshots = await readSnapshotFiles(cacheUri);
+  const snapshotBytesBefore = snapshots.reduce((sum, snapshot) => sum + snapshot.size, 0);
   if (snapshots.length === 0) {
     return {
       triggered: false,
       evictedFiles: 0,
       reclaimedBytes: 0,
-      totalBytesBefore: summaryBefore.totalBytes,
-      totalBytesAfter: summaryBefore.totalBytes
+      totalBytesBefore: 0,
+      totalBytesAfter: 0
     };
   }
 
@@ -219,7 +220,7 @@ export async function pruneScalaLiteCacheSnapshots(
   const evictedNames = new Set<string>();
   let evictedFiles = 0;
   let reclaimedBytes = 0;
-  let runningTotalBytes = summaryBefore.totalBytes;
+  let runningTotalBytes = snapshotBytesBefore;
 
   for (const groupedSnapshots of byGroup.values()) {
     groupedSnapshots.sort((left, right) => right.mtime - left.mtime);
@@ -269,7 +270,7 @@ export async function pruneScalaLiteCacheSnapshots(
     triggered: evictedFiles > 0,
     evictedFiles,
     reclaimedBytes,
-    totalBytesBefore: summaryBefore.totalBytes,
+    totalBytesBefore: snapshotBytesBefore,
     totalBytesAfter: runningTotalBytes
   };
 }

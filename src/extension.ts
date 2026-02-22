@@ -162,6 +162,46 @@ function getDependencyWorkspaceFolderCandidates(): readonly vscode.WorkspaceFold
   ];
 }
 
+function normalizeWorkspaceFolderUri(value: unknown): vscode.Uri | undefined {
+  if (value instanceof vscode.Uri) {
+    return value;
+  }
+
+  if (typeof value === 'string' && value.trim().length > 0) {
+    try {
+      return vscode.Uri.parse(value);
+    } catch {
+      return undefined;
+    }
+  }
+
+  if (value && typeof value === 'object') {
+    const candidate = value as {
+      readonly scheme?: unknown;
+      readonly authority?: unknown;
+      readonly path?: unknown;
+      readonly query?: unknown;
+      readonly fragment?: unknown;
+    };
+
+    if (typeof candidate.scheme === 'string' && typeof candidate.path === 'string') {
+      try {
+        return vscode.Uri.from({
+          scheme: candidate.scheme,
+          authority: typeof candidate.authority === 'string' ? candidate.authority : '',
+          path: candidate.path,
+          query: typeof candidate.query === 'string' ? candidate.query : '',
+          fragment: typeof candidate.fragment === 'string' ? candidate.fragment : ''
+        });
+      } catch {
+        return undefined;
+      }
+    }
+  }
+
+  return undefined;
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   const activationStartedAt = Date.now();
   const logger = new StructuredLogger('INFO');
@@ -446,12 +486,13 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.showInformationMessage(vscode.l10n.t('Build tool re-detection completed.'));
   });
 
-  const syncClasspathDisposable = vscode.commands.registerCommand(COMMAND_SYNC_CLASSPATH, async (targetFolderUri?: vscode.Uri) => {
+  const syncClasspathDisposable = vscode.commands.registerCommand(COMMAND_SYNC_CLASSPATH, async (targetFolderUriArg?: unknown) => {
     if (activeMode !== 'C') {
       vscode.window.showWarningMessage(vscode.l10n.t('Switch to Mode C to enable dependency indexing.'));
       return;
     }
 
+    const targetFolderUri = normalizeWorkspaceFolderUri(targetFolderUriArg);
     const folder = targetFolderUri
       ? vscode.workspace.getWorkspaceFolder(targetFolderUri)
       : getDependencyWorkspaceFolderCandidates()[0];

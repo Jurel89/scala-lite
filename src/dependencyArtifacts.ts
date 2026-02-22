@@ -235,7 +235,10 @@ async function enforceSourcesCacheLru(workspaceFolder: vscode.WorkspaceFolder): 
 
 async function cacheAttachmentArtifact(
   workspaceFolder: vscode.WorkspaceFolder,
-  sourcePath: string | undefined
+  sourcePath: string | undefined,
+  options?: {
+    readonly enforceLru?: boolean;
+  }
 ): Promise<string | undefined> {
   if (typeof sourcePath !== 'string' || sourcePath.length === 0) {
     return undefined;
@@ -262,7 +265,9 @@ async function cacheAttachmentArtifact(
       lastAccessedAt: new Date().toISOString()
     });
 
-    await enforceSourcesCacheLru(workspaceFolder);
+    if (options?.enforceLru !== false) {
+      await enforceSourcesCacheLru(workspaceFolder);
+    }
     return destinationPath;
   } catch {
     return sourcePath;
@@ -468,10 +473,10 @@ export async function fetchDependencyArtifacts(options: FetchDependencyArtifacts
     ]);
 
     const cachedSourcesPath = hasSources
-      ? await cacheAttachmentArtifact(options.workspaceFolder, sourcesPathCandidate)
+      ? await cacheAttachmentArtifact(options.workspaceFolder, sourcesPathCandidate, { enforceLru: false })
       : undefined;
     const cachedJavadocPath = hasJavadoc
-      ? await cacheAttachmentArtifact(options.workspaceFolder, javadocPathCandidate)
+      ? await cacheAttachmentArtifact(options.workspaceFolder, javadocPathCandidate, { enforceLru: false })
       : undefined;
 
     return {

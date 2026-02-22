@@ -26,7 +26,9 @@ test('FR-0053: low-confidence hover offers sync classpath action when dependency
   const source = readSource('src/hoverInfoFeature.ts');
 
   assert.equal(source.includes('resolveWorkspaceFolderForDocument'), true);
+  assert.equal(source.includes("mode === 'C'"), true);
+  assert.equal(source.includes('readDependencyConfigFromWorkspaceConfig'), true);
   assert.equal(source.includes('hasDependencyIndexCache'), true);
   assert.equal(source.includes('Classpath not synced —'), true);
-  assert.equal(source.includes("commandLink('scalaLite.syncClasspath')"), true);
+  assert.equal(source.includes("commandLink('scalaLite.syncClasspath', workspaceFolder.uri.toString())"), true);
 });

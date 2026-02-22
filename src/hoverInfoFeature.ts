@@ -6,6 +6,7 @@ import { StructuredLogger } from './structuredLogger';
 import { compareSymbols } from './symbolSort';
 import { GoToDefinitionProvider, SharedDefinitionResolution } from './goToDefinitionFeature';
 import { hasDependencyIndexCache } from './scalaLiteCache';
+import { readDependencyConfigFromWorkspaceConfig } from './workspaceConfig';
 
 function kindLabel(kind: IndexedSymbol['symbolKind']): string {
   if (kind === 'package') {
@@ -396,8 +397,14 @@ export class HoverInfoProvider implements vscode.HoverProvider {
         markdown.isTrusted = true;
         if (hasSources) {
           markdown.appendMarkdown(`\n*${vscode.l10n.t('Sources available — Cmd+click to navigate.')}*\n`);
-        } else {
+        } else if (provenance === 'dependency') {
           markdown.appendMarkdown(`\n*${vscode.l10n.t('No sources available —')} [${vscode.l10n.t('Fetch Sources')}](${commandLink('scalaLite.fetchDependencySources')})*\n`);
+          if (!signatureLine) {
+            markdown.appendMarkdown(`\n**${vscode.l10n.t('Signature')}**\n`);
+            markdown.appendCodeblock(`${kindLabel(preferred.symbolKind)} ${preferred.symbolName}`, 'scala');
+          }
+        } else {
+          markdown.appendMarkdown(`\n*${vscode.l10n.t('No sources available —')}*\n`);
           if (!signatureLine) {
             markdown.appendMarkdown(`\n**${vscode.l10n.t('Signature')}**\n`);
             markdown.appendCodeblock(`${kindLabel(preferred.symbolKind)} ${preferred.symbolName}`, 'scala');
@@ -516,9 +523,19 @@ export class HoverInfoProvider implements vscode.HoverProvider {
     markdown.appendMarkdown(`### ${symbolName}\n\n`);
 
     const workspaceFolder = resolveWorkspaceFolderForDocument(documentUri);
-    if (workspaceFolder && !(await hasDependencyIndexCache(workspaceFolder))) {
+    const mode = this.getMode();
+    const dependencyConfig = mode === 'C' ? await readDependencyConfigFromWorkspaceConfig() : undefined;
+    if (
+      mode === 'C'
+      && dependencyConfig?.enabled === true
+      && workspaceFolder
+      && !(await hasDependencyIndexCache(workspaceFolder))
+    ) {
       markdown.isTrusted = true;
-      markdown.appendMarkdown(`${vscode.l10n.t('Classpath not synced —')} [${vscode.l10n.t('Sync Classpath')}](${commandLink('scalaLite.syncClasspath')})`);
+      markdown.appendMarkdown(
+        `${vscode.l10n.t('Classpath not synced —')} `
+        + `[${vscode.l10n.t('Sync Classpath')}](${commandLink('scalaLite.syncClasspath', workspaceFolder.uri.toString())})`
+      );
       return new vscode.Hover(markdown, wordRange);
     }
 

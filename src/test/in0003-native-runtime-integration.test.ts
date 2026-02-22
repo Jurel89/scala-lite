@@ -12,7 +12,7 @@ test('IN-0003: symbol index manager syncs native index and exposes native query 
   const source = readSource('src/symbolIndex.ts');
   assert.equal(source.includes('public async searchSymbols('), true);
   assert.equal(source.includes('getNativeEngine().querySymbols'), true);
-  assert.equal(source.includes('await this.getNativeEngine().rebuildIndex(files, token);'), true);
+  assert.equal(source.includes('await this.getNativeEngine().appendFiles(files, token);'), true);
   assert.equal(source.includes('await this.getNativeEngine().evictFile(filePath);'), true);
 });
 

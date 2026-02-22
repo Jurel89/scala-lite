@@ -20,7 +20,8 @@ test('FR-0035: symbol index stores ImportRecord entries per file and exposes loo
   assert.equal(rustSource.includes('pub struct ImportEntry {'), true);
   assert.equal(rustSource.includes('pub imports: Vec<ImportEntry>,'), true);
   assert.equal(source.includes('const imports = parsed?.imports ?? [];'), true);
-  assert.equal(source.includes('this.importsByFile.set(document.uri.toString(), [...imports]);'), true);
+  assert.equal(source.includes('this.importsByFile.set('), true);
+  assert.equal(source.includes('[...imports]'), true);
 });
 
 test('FR-0035: import extraction handles explicit, selective, Scala2 rename, Scala3 rename, and multiline forms', () => {

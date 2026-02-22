@@ -87,5 +87,12 @@
   "Activation audit unavailable until extension has fully initialized.": "Activation audit unavailable until extension has fully initialized.",
   "Activation audit: {0}ms (budget: {1}ms).": "Activation audit: {0}ms (budget: {1}ms).",
   "Activation exceeded budget: {0}ms (> {1}ms).": "Activation exceeded budget: {0}ms (> {1}ms).",
-  "Memory budget audit completed for mode {0}.": "Memory budget audit completed for mode {0}."
+  "Memory budget audit completed for mode {0}.": "Memory budget audit completed for mode {0}.",
+  "Scala Lite memory usage ({0}MB) exceeds budget ({1}MB) for this workspace. Consider switching to Mode B or configuring a larger budget.": "Scala Lite memory usage ({0}MB) exceeds budget ({1}MB) for this workspace. Consider switching to Mode B or configuring a larger budget.",
+  "Switch to Mode B": "Switch to Mode B",
+  "Increase Budget": "Increase Budget",
+  "Dismiss": "Dismiss",
+  "Scala Lite memory report generated.": "Scala Lite memory report generated.",
+  "Scala Lite: Rebuilding index": "Scala Lite: Rebuilding index",
+  "Indexing batch {0}/{1}…": "Indexing batch {0}/{1}…"
 }

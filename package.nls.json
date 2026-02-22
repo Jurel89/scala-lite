@@ -24,6 +24,7 @@
   "command.scalaLite.restartNativeEngine.title": "Restart Native Engine",
   "command.scalaLite.runActivationAudit.title": "Run Activation Audit",
   "command.scalaLite.runMemoryBudgetAudit.title": "Run Memory Budget Audit",
+  "command.scalaLite.memoryReport.title": "Memory Report",
   "configuration.scalaLite.mode.description": "Default Scala Lite mode (A/B/C) when opening the workspace.",
   "configuration.scalaLite.logLevel.description": "Log verbosity for Scala Lite internal structured logs.",
   "configuration.scalaLite.diagnostics.enabled.description": "Enable or disable syntax diagnostics collection.",

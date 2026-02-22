@@ -23,23 +23,47 @@ function showFallbackModeBadge(): void {
 }
 
 function bindMemoryUsageHook(engine: NativeEngine): void {
-  let cachedNativeRssBytes = 0;
+  let cachedUsage: {
+    readonly rssBytes: number;
+    readonly accountedBytes: number;
+    readonly estimatedOverheadBytes: number;
+    readonly includes: string;
+    readonly excludes: string;
+  } = {
+    rssBytes: 0,
+    accountedBytes: 0,
+    estimatedOverheadBytes: 0,
+    includes: '',
+    excludes: ''
+  };
   const globalScope = globalThis as {
-    __scalaLiteNativeMemoryUsage?: () => number | { rssBytes?: number };
+    __scalaLiteNativeMemoryUsage?: () => number | {
+      rssBytes?: number;
+      accountedBytes?: number;
+      estimatedOverheadBytes?: number;
+      includes?: string;
+      excludes?: string;
+    };
   };
 
   globalScope.__scalaLiteNativeMemoryUsage = () => {
     if (engine.status === 'crashed') {
-      return { rssBytes: cachedNativeRssBytes };
+      return cachedUsage;
     }
 
     void engine.getMemoryUsage()
       .then((usage) => {
-        cachedNativeRssBytes = usage.nativeRssBytes;
+        cachedUsage = {
+          rssBytes: usage.nativeRssBytes,
+          accountedBytes: usage.accountedBytes,
+          estimatedOverheadBytes: usage.estimatedOverheadBytes,
+          includes: usage.includes,
+          excludes: usage.excludes
+        };
       })
       .catch(() => {
       });
-    return { rssBytes: cachedNativeRssBytes };
+    return cachedUsage;
   };
 }
 

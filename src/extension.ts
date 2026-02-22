@@ -8,6 +8,11 @@ import { runIdleCpuAudit } from './idleCpuAudit';
 import { ModeManager } from './modeManager';
 import { WorkspaceMode } from './modePresentation';
 import {
+  openOrCreateWorkspaceConfig,
+  readLogLevelFromWorkspaceConfig,
+  getWorkspaceConfigSourceLabel
+} from './workspaceConfig';
+import {
   registerRunMainCommandsWithExecutor,
   RunMainCodeLensProvider
 } from './runMainFeature';
@@ -16,8 +21,6 @@ import {
   RunTestCodeLensProvider
 } from './runTestFeature';
 import { BuildDiagnosticsRunner } from './buildDiagnostics';
-import { readLogLevelFromWorkspaceConfig } from './workspaceConfig';
-import { getWorkspaceConfigSourceLabel } from './workspaceConfig';
 import { StructuredLogger } from './structuredLogger';
 import { createDiagnosticBundle } from './diagnosticBundle';
 import { ProfileManager } from './profileManager';
@@ -46,6 +49,8 @@ import { SyntaxDiagnosticsController } from './syntaxDiagnosticsFeature';
 import { HoverInfoProvider } from './hoverInfoFeature';
 
 const IDLE_AUDIT_DURATION_MS = 30_000;
+const MODE_C_BUDGET_AUDIT_INTERVAL_MS = 60_000;
+const BUDGET_NOTIFICATION_DEBOUNCE_MS = 5 * 60_000;
 
 function renderDetectionSummary(results: readonly BuildToolDetectionResult[]): string {
   return results
@@ -107,7 +112,7 @@ async function onModeChanged(
 ): Promise<void> {
   logger.info('ACTIVATE', `Switching mode to ${mode}.`);
   await symbolIndexManager.setMode(mode);
-  auditMemoryBudgetForMode(mode, logger);
+  await auditMemoryBudgetForMode(mode, logger, symbolIndexManager.getMemoryBudgetMetrics());
 
   if (mode === 'A') {
     return;
@@ -168,6 +173,83 @@ export function activate(context: vscode.ExtensionContext): void {
   const workspaceSymbolProvider = new WorkspaceSymbolSearchProvider(symbolIndexManager, () => activeMode);
   const referenceProvider = new FindUsagesProvider(symbolIndexManager, () => activeMode);
   const syntaxDiagnosticsController = new SyntaxDiagnosticsController(symbolIndexManager, () => activeMode, logger);
+  let modeCBudgetAuditTimer: ReturnType<typeof setInterval> | undefined;
+  let lastBudgetViolationNotificationAt = 0;
+
+  const configureModeCBudgetAuditTimer = (): void => {
+    if (modeCBudgetAuditTimer) {
+      clearInterval(modeCBudgetAuditTimer);
+      modeCBudgetAuditTimer = undefined;
+    }
+
+    if (activeMode !== 'C') {
+      return;
+    }
+
+    modeCBudgetAuditTimer = setInterval(() => {
+      void runMemoryAuditWithFeedback();
+    }, MODE_C_BUDGET_AUDIT_INTERVAL_MS);
+  };
+
+  const openMemoryBudgetConfig = async (): Promise<void> => {
+    const document = await openOrCreateWorkspaceConfig(getPrimaryDetectedBuildTool());
+    if (!document) {
+      return;
+    }
+
+    const editor = await vscode.window.showTextDocument(document, { preview: false });
+    const text = document.getText();
+    const memoryIndex = text.indexOf('"memory"');
+    const budgetsIndex = text.indexOf('"budgets"');
+    const targetIndex = memoryIndex >= 0 ? memoryIndex : Math.max(0, budgetsIndex);
+    const target = document.positionAt(targetIndex);
+    editor.selection = new vscode.Selection(target, target);
+    editor.revealRange(new vscode.Range(target, target), vscode.TextEditorRevealType.InCenter);
+  };
+
+  const runMemoryAuditWithFeedback = async (): Promise<void> => {
+    if (activeMode !== 'C') {
+      return;
+    }
+
+    const result = await auditMemoryBudgetForMode(activeMode, logger, symbolIndexManager.getMemoryBudgetMetrics());
+    const severeOverage = result.exceeded && result.totalUsedBytes > (result.maxTotalBytes * 1.5);
+    if (!severeOverage) {
+      return;
+    }
+
+    const now = Date.now();
+    if (now - lastBudgetViolationNotificationAt < BUDGET_NOTIFICATION_DEBOUNCE_MS) {
+      return;
+    }
+
+    lastBudgetViolationNotificationAt = now;
+
+    const toMb = (bytes: number): string => (bytes / (1024 * 1024)).toFixed(1);
+    const switchAction = vscode.l10n.t('Switch to Mode B');
+    const increaseAction = vscode.l10n.t('Increase Budget');
+    const dismissAction = vscode.l10n.t('Dismiss');
+
+    const picked = await vscode.window.showWarningMessage(
+      vscode.l10n.t(
+        'Scala Lite memory usage ({0}MB) exceeds budget ({1}MB) for this workspace. Consider switching to Mode B or configuring a larger budget.',
+        toMb(result.totalUsedBytes),
+        toMb(result.maxTotalBytes)
+      ),
+      switchAction,
+      increaseAction,
+      dismissAction
+    );
+
+    if (picked === switchAction) {
+      await modeManager.switchModeForAutomation('B');
+      return;
+    }
+
+    if (picked === increaseAction) {
+      await openMemoryBudgetConfig();
+    }
+  };
 
   const editorAccessDisposable = vscode.window.onDidChangeActiveTextEditor((editor) => {
     if (editor) {
@@ -191,6 +273,7 @@ export function activate(context: vscode.ExtensionContext): void {
     onModeChanged: async (mode) => {
       activeMode = mode;
       await onModeChanged(mode, buildToolDetectionSession, buildToolState, logger, symbolIndexManager);
+      configureModeCBudgetAuditTimer();
       await syntaxDiagnosticsController.refreshOpenDocuments();
     },
     getBuildIntegrationLabel: () => getPrimaryDetectedBuildTool(),
@@ -310,7 +393,21 @@ export function activate(context: vscode.ExtensionContext): void {
   });
   const nativeEngineDisposables = registerNativeEngineFeature(logger);
   const activationPerformanceDisposables = registerActivationPerformanceFeature();
-  const memoryBudgetDisposables = registerMemoryBudgetFeature(() => activeMode, logger);
+  const memoryBudgetDisposables = registerMemoryBudgetFeature(
+    () => activeMode,
+    () => symbolIndexManager.getMemoryBudgetMetrics(),
+    () => symbolIndexManager.getMemoryBreakdown(),
+    logger
+  );
+  const modeCRebuildAuditDisposable = symbolIndexManager.onDidModeCRebuildCompleted(() => {
+    void runMemoryAuditWithFeedback();
+  });
+  const modeCBudgetTimerDisposable = new vscode.Disposable(() => {
+    if (modeCBudgetAuditTimer) {
+      clearInterval(modeCBudgetAuditTimer);
+      modeCBudgetAuditTimer = undefined;
+    }
+  });
 
   context.subscriptions.push(
     runIdleAuditDisposable,
@@ -330,6 +427,8 @@ export function activate(context: vscode.ExtensionContext): void {
     ...nativeEngineDisposables,
     ...activationPerformanceDisposables,
     ...memoryBudgetDisposables,
+    modeCRebuildAuditDisposable,
+    modeCBudgetTimerDisposable,
     ...workspaceConfigDisposables,
     ...runMainCommandDisposables,
     ...runTestCommandDisposables

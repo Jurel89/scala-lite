@@ -33,17 +33,15 @@ async function firstExistingPath(paths: readonly string[]): Promise<string | und
 }
 
 async function listAvailableJmods(jmodsPath: string): Promise<readonly string[]> {
-  let entries: string[] = [];
   try {
     const directoryEntries = await fs.readdir(jmodsPath, { withFileTypes: true });
-    entries = directoryEntries
+    const entries = directoryEntries
       .filter((entry) => entry.isFile() && entry.name.endsWith('.jmod'))
       .map((entry) => entry.name.slice(0, -5));
+    return entries.sort((left, right) => left.localeCompare(right));
   } catch {
     return [];
   }
-
-  return entries.sort((left, right) => left.localeCompare(right));
 }
 
 async function detectMacOsJdkHome(): Promise<string | undefined> {

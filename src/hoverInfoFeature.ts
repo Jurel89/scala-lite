@@ -106,7 +106,7 @@ function commandLink(command: string, arg: string): string {
 }
 
 function escapeMarkdown(value: string): string {
-  return value.replace(/[\\`*_{}\[\]()#+!|]/g, '\\$&');
+  return value.replace(/[\\`*_{}[\]()#+!|]/g, '\\$&');
 }
 
 async function readDefinitionPreview(filePath: string, lineNumber: number, maxPreviewLines: number): Promise<string | undefined> {

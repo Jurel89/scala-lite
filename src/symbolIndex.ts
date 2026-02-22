@@ -63,10 +63,6 @@ function isIndexableFile(document: vscode.TextDocument): boolean {
   return document.fileName.endsWith('.scala') || document.fileName.endsWith('.sbt');
 }
 
-function extractSymbols(document: vscode.TextDocument): IndexedSymbol[] {
-  return extractSymbolsFromContent(document.uri.fsPath, document.getText());
-}
-
 function extractSymbolsFromContent(filePath: string, content: string): IndexedSymbol[] {
   const symbols: IndexedSymbol[] = [];
   let currentContainerName: string | undefined;
@@ -378,32 +374,82 @@ export class SymbolIndexManager implements vscode.Disposable {
     let estimatedBytes = 0;
 
     for (const [fileKey, symbols] of this.indexByFile.entries()) {
-      estimatedBytes += Buffer.byteLength(fileKey, 'utf8');
+      estimatedBytes += this.estimateStringBytes(fileKey);
       for (const symbol of symbols) {
-        estimatedBytes += Buffer.byteLength(JSON.stringify(symbol), 'utf8');
+        estimatedBytes += this.estimateIndexedSymbolBytes(symbol);
       }
     }
 
     for (const [fileKey, imports] of this.importsByFile.entries()) {
-      estimatedBytes += Buffer.byteLength(fileKey, 'utf8');
+      estimatedBytes += this.estimateStringBytes(fileKey);
       for (const importEntry of imports) {
-        estimatedBytes += Buffer.byteLength(JSON.stringify(importEntry), 'utf8');
+        estimatedBytes += this.estimateImportRecordBytes(importEntry);
       }
     }
 
     for (const [filePath, packageName] of this.packageByFile.entries()) {
-      estimatedBytes += Buffer.byteLength(filePath, 'utf8');
-      estimatedBytes += Buffer.byteLength(packageName, 'utf8');
+      estimatedBytes += this.estimateStringBytes(filePath);
+      estimatedBytes += this.estimateStringBytes(packageName);
     }
 
     for (const [filePath, diagnostics] of this.diagnosticsByFile.entries()) {
-      estimatedBytes += Buffer.byteLength(filePath, 'utf8');
+      estimatedBytes += this.estimateStringBytes(filePath);
       for (const diagnostic of diagnostics) {
-        estimatedBytes += Buffer.byteLength(JSON.stringify(diagnostic), 'utf8');
+        estimatedBytes += this.estimateNativeDiagnosticBytes(diagnostic);
       }
     }
 
     return Math.max(0, Math.round(estimatedBytes));
+  }
+
+  private estimateIndexedSymbolBytes(symbol: IndexedSymbol): number {
+    let bytes = this.estimateStringBytes(symbol.symbolName);
+    bytes += this.estimateStringBytes(symbol.symbolKind);
+    bytes += this.estimateStringBytes(symbol.filePath);
+    bytes += this.estimateNumberBytes();
+    bytes += this.estimateStringBytes(symbol.packageName);
+    bytes += this.estimateStringBytes(symbol.visibility);
+    if (symbol.containerName) {
+      bytes += this.estimateStringBytes(symbol.containerName);
+    }
+
+    return bytes;
+  }
+
+  private estimateImportRecordBytes(importRecord: ImportRecord): number {
+    let bytes = this.estimateStringBytes(importRecord.packagePath);
+    if (importRecord.importedName) {
+      bytes += this.estimateStringBytes(importRecord.importedName);
+    }
+    if (importRecord.sourceSymbolName) {
+      bytes += this.estimateStringBytes(importRecord.sourceSymbolName);
+    }
+    bytes += this.estimateBooleanBytes();
+    bytes += this.estimateNumberBytes();
+
+    return bytes;
+  }
+
+  private estimateNativeDiagnosticBytes(diagnostic: NativeDiagnostic): number {
+    let bytes = this.estimateStringBytes(diagnostic.filePath);
+    bytes += this.estimateNumberBytes();
+    bytes += this.estimateNumberBytes();
+    bytes += this.estimateStringBytes(diagnostic.severity);
+    bytes += this.estimateStringBytes(diagnostic.message);
+
+    return bytes;
+  }
+
+  private estimateStringBytes(value: string): number {
+    return Buffer.byteLength(value, 'utf8');
+  }
+
+  private estimateNumberBytes(): number {
+    return 8;
+  }
+
+  private estimateBooleanBytes(): number {
+    return 4;
   }
 
   public getSymbolsForPackage(packagePath: string): readonly IndexedSymbol[] {

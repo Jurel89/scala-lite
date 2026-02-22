@@ -139,7 +139,7 @@
         },
         "memory": {
           "type": "object",
-          "description": "Optional memory budget overrides in megabytes.",
+          "description": "Optional memory budget caps in megabytes (upper bounds applied to computed budgets).",
           "properties": {
             "heapMb": {
               "type": "integer",

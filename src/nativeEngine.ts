@@ -179,6 +179,7 @@ interface RawNativeImport {
 class TypeScriptFallbackEngine {
   private readonly symbolsByName = new Map<string, IndexedSymbol[]>();
   private readonly diagnosticsByFile = new Map<string, NativeDiagnostic[]>();
+  private readonly symbolNamesByFile = new Map<string, Set<string>>();
 
   public parseFile(filePath: string, content: string): NativeParseResult {
     const symbols = this.extractSymbols(filePath, content);
@@ -201,12 +202,15 @@ class TypeScriptFallbackEngine {
     for (const file of files) {
       this.evictFile(file.filePath);
       const parsed = this.parseFile(file.filePath, file.content);
+      const symbolNames = new Set<string>();
       for (const symbol of parsed.symbols) {
         const existing = this.symbolsByName.get(symbol.symbolName) ?? [];
         existing.push(symbol);
         this.symbolsByName.set(symbol.symbolName, existing);
+        symbolNames.add(symbol.symbolName);
       }
 
+      this.symbolNamesByFile.set(file.filePath, symbolNames);
       this.diagnosticsByFile.set(file.filePath, [...parsed.diagnostics]);
     }
 
@@ -216,6 +220,7 @@ class TypeScriptFallbackEngine {
   public clearIndex(): void {
     this.symbolsByName.clear();
     this.diagnosticsByFile.clear();
+    this.symbolNamesByFile.clear();
   }
 
   public querySymbols(query: string, limit: number): readonly IndexedSymbol[] {
@@ -301,7 +306,17 @@ class TypeScriptFallbackEngine {
 
   public evictFile(filePath: string): void {
     this.diagnosticsByFile.delete(filePath);
-    for (const [key, symbols] of this.symbolsByName.entries()) {
+    const symbolNames = this.symbolNamesByFile.get(filePath);
+    if (!symbolNames || symbolNames.size === 0) {
+      return;
+    }
+
+    for (const key of symbolNames) {
+      const symbols = this.symbolsByName.get(key);
+      if (!symbols) {
+        continue;
+      }
+
       const filtered = symbols.filter((symbol) => symbol.filePath !== filePath);
       if (filtered.length === 0) {
         this.symbolsByName.delete(key);
@@ -310,6 +325,8 @@ class TypeScriptFallbackEngine {
 
       this.symbolsByName.set(key, filtered);
     }
+
+    this.symbolNamesByFile.delete(filePath);
   }
 
   public rebuildIndex(files: readonly { filePath: string; content: string }[]): number {
@@ -355,6 +372,7 @@ class TypeScriptFallbackEngine {
   public shutdown(): void {
     this.symbolsByName.clear();
     this.diagnosticsByFile.clear();
+    this.symbolNamesByFile.clear();
   }
 
   private extractSymbols(filePath: string, content: string): IndexedSymbol[] {

@@ -136,10 +136,6 @@ function formatBytes(bytes: number): string {
   return `${(Math.max(0, bytes) / MB).toFixed(1)}MB`;
 }
 
-function readNativeRssBytes(): number {
-  return readNativeUsage().nativeRssBytes;
-}
-
 function readNativeUsage(): {
   readonly nativeRssBytes: number;
   readonly accountedBytes: number;

@@ -748,7 +748,8 @@ fn compact_string_interner(index: &mut IndexSnapshot) {
 
     let remap = |id: u32, id_map: &HashMap<u32, u32>| -> Option<u32> { id_map.get(&id).copied() };
 
-    let mut new_by_symbol: HashMap<u32, Vec<InternedSymbolEntry>> = HashMap::with_capacity(index.by_symbol.len());
+    let mut new_by_symbol: HashMap<u32, Vec<InternedSymbolEntry>> =
+        HashMap::with_capacity(index.by_symbol.len());
     for (old_name_id, entries) in &index.by_symbol {
         let new_name_id = match remap(*old_name_id, &id_map) {
             Some(value) => value,
@@ -757,14 +758,14 @@ fn compact_string_interner(index: &mut IndexSnapshot) {
 
         let mut remapped_entries: Vec<InternedSymbolEntry> = Vec::with_capacity(entries.len());
         for entry in entries {
-            let Some(file_path_id) = remap(entry.file_path_id, &id_map) else { continue; };
+            let Some(file_path_id) = remap(entry.file_path_id, &id_map) else {
+                continue;
+            };
             let package_name_id = match remap(entry.package_name_id, &id_map) {
                 Some(value) => value,
                 None => continue,
             };
-            let container_name_id = entry
-                .container_name_id
-                .and_then(|id| remap(id, &id_map));
+            let container_name_id = entry.container_name_id.and_then(|id| remap(id, &id_map));
 
             remapped_entries.push(InternedSymbolEntry {
                 name_id: new_name_id,
@@ -785,11 +786,15 @@ fn compact_string_interner(index: &mut IndexSnapshot) {
     let mut new_diagnostics_by_file: HashMap<u32, Vec<InternedDiagnosticEntry>> =
         HashMap::with_capacity(index.diagnostics_by_file.len());
     for (old_file_id, entries) in &index.diagnostics_by_file {
-        let Some(new_file_id) = remap(*old_file_id, &id_map) else { continue; };
+        let Some(new_file_id) = remap(*old_file_id, &id_map) else {
+            continue;
+        };
         let mut remapped_entries: Vec<InternedDiagnosticEntry> = Vec::with_capacity(entries.len());
 
         for entry in entries {
-            let Some(message_id) = remap(entry.message_id, &id_map) else { continue; };
+            let Some(message_id) = remap(entry.message_id, &id_map) else {
+                continue;
+            };
             remapped_entries.push(InternedDiagnosticEntry {
                 line_number: entry.line_number,
                 column: entry.column,
@@ -806,11 +811,15 @@ fn compact_string_interner(index: &mut IndexSnapshot) {
     let mut new_imports_by_file: HashMap<u32, Vec<InternedImportEntry>> =
         HashMap::with_capacity(index.imports_by_file.len());
     for (old_file_id, entries) in &index.imports_by_file {
-        let Some(new_file_id) = remap(*old_file_id, &id_map) else { continue; };
+        let Some(new_file_id) = remap(*old_file_id, &id_map) else {
+            continue;
+        };
         let mut remapped_entries: Vec<InternedImportEntry> = Vec::with_capacity(entries.len());
 
         for entry in entries {
-            let Some(package_path_id) = remap(entry.package_path_id, &id_map) else { continue; };
+            let Some(package_path_id) = remap(entry.package_path_id, &id_map) else {
+                continue;
+            };
             let imported_name_id = entry.imported_name_id.and_then(|id| remap(id, &id_map));
             let source_symbol_name_id = entry
                 .source_symbol_name_id
@@ -830,9 +839,13 @@ fn compact_string_interner(index: &mut IndexSnapshot) {
         }
     }
 
-    let mut new_package_by_file: HashMap<u32, u32> = HashMap::with_capacity(index.package_by_file.len());
+    let mut new_package_by_file: HashMap<u32, u32> =
+        HashMap::with_capacity(index.package_by_file.len());
     for (old_file_id, old_package_id) in &index.package_by_file {
-        if let (Some(new_file_id), Some(new_package_id)) = (remap(*old_file_id, &id_map), remap(*old_package_id, &id_map)) {
+        if let (Some(new_file_id), Some(new_package_id)) = (
+            remap(*old_file_id, &id_map),
+            remap(*old_package_id, &id_map),
+        ) {
             new_package_by_file.insert(new_file_id, new_package_id);
         }
     }
@@ -945,7 +958,10 @@ fn materialize_symbol_entry(
     entry: &InternedSymbolEntry,
 ) -> Option<SymbolEntry> {
     let name = index.string_interner.resolve(entry.name_id)?.to_string();
-    let file_path = index.string_interner.resolve(entry.file_path_id)?.to_string();
+    let file_path = index
+        .string_interner
+        .resolve(entry.file_path_id)?
+        .to_string();
     let package_name = index
         .string_interner
         .resolve(entry.package_name_id)?
@@ -987,7 +1003,10 @@ fn materialize_import_entry(
 ) -> Option<ImportEntry> {
     Some(ImportEntry {
         file_path: file_path.to_string(),
-        package_path: index.string_interner.resolve(entry.package_path_id)?.to_string(),
+        package_path: index
+            .string_interner
+            .resolve(entry.package_path_id)?
+            .to_string(),
         imported_name: entry
             .imported_name_id
             .and_then(|id| index.string_interner.resolve(id).map(str::to_string)),
@@ -1146,8 +1165,10 @@ pub fn get_memory_usage(index: &IndexSnapshot) -> Result<MemoryUsage, EngineErro
         accounted_bytes += (entries.capacity() * std::mem::size_of::<InternedSymbolEntry>()) as u64;
     }
 
-    accounted_bytes += (index.string_interner.strings.capacity() * std::mem::size_of::<String>()) as u64;
-    accounted_bytes += (index.string_interner.lookup.capacity() * std::mem::size_of::<(String, u32)>()) as u64;
+    accounted_bytes +=
+        (index.string_interner.strings.capacity() * std::mem::size_of::<String>()) as u64;
+    accounted_bytes +=
+        (index.string_interner.lookup.capacity() * std::mem::size_of::<(String, u32)>()) as u64;
     for value in &index.string_interner.strings {
         accounted_bytes += string_allocated_bytes(value);
     }
@@ -1299,12 +1320,13 @@ val publicValue = 42
         }];
 
         let index = index_files(&files).expect("index_files should succeed");
-        let diagnostics = get_diagnostics(&index, "/tmp/a.scala").expect("get_diagnostics should succeed");
+        let diagnostics =
+            get_diagnostics(&index, "/tmp/a.scala").expect("get_diagnostics should succeed");
 
         assert!(!diagnostics.is_empty());
-        assert!(diagnostics.iter().any(|entry| {
-            entry.file_path == "/tmp/a.scala" && entry.severity == "error"
-        }));
+        assert!(diagnostics
+            .iter()
+            .any(|entry| { entry.file_path == "/tmp/a.scala" && entry.severity == "error" }));
     }
 
     #[test]
@@ -1328,7 +1350,9 @@ val publicValue = 42
         // Ensure the remaining file is still indexed and interner compacted.
         let remaining = query_symbols(&index, "B", 10).expect("query_symbols should succeed");
         assert_eq!(remaining.len(), 1);
-        assert!(remaining.iter().all(|entry| entry.file_path == "/tmp/b.scala"));
+        assert!(remaining
+            .iter()
+            .all(|entry| entry.file_path == "/tmp/b.scala"));
 
         let after_evict_count = index.string_interner.strings.len();
         assert!(after_evict_count < initial_string_count);
@@ -1416,8 +1440,7 @@ mod napi_bridge {
                 .inner
                 .lock()
                 .map_err(|_| Error::from_reason("engine lock poisoned".to_string()))?;
-            append_files(&mut guard, &mapped)
-                .map_err(|error| Error::from_reason(error.to_string()))
+            append_files(&mut guard, &mapped).map_err(|error| Error::from_reason(error.to_string()))
         }
 
         #[napi]

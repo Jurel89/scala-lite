@@ -2,7 +2,8 @@ import * as vscode from 'vscode';
 import * as path from 'node:path';
 import { WorkspaceMode } from './modePresentation';
 import { IndexedSymbol, SymbolIndexManager } from './symbolIndex';
-import { readModuleFolderFromWorkspaceConfig } from './workspaceConfig';
+import { queryDependencySymbols } from './dependencyQuery';
+import { readDependencyConfigFromWorkspaceConfig, readModuleFolderFromWorkspaceConfig } from './workspaceConfig';
 import { formatResultBadge, ResultSource } from './resultBadges';
 import { compareSymbols } from './symbolSort';
 
@@ -107,9 +108,18 @@ export class WorkspaceSymbolSearchProvider implements vscode.WorkspaceSymbolProv
     }
 
     const normalizedQuery = query.trim().toLowerCase();
-    const allSymbols = normalizedQuery.length === 0
+    const indexedSymbols = normalizedQuery.length === 0
       ? this.symbolIndexManager.getAllSymbols()
       : await this.symbolIndexManager.searchSymbols(normalizedQuery, 300, token);
+    let allSymbols: readonly IndexedSymbol[] = indexedSymbols;
+    if (mode === 'C' && normalizedQuery.length > 0) {
+      const dependencyConfig = await readDependencyConfigFromWorkspaceConfig();
+      const folder = vscode.workspace.workspaceFolders?.[0];
+      if (dependencyConfig.enabled && dependencyConfig.includeInWorkspaceSymbol && folder) {
+        const dependencySymbols = await queryDependencySymbols(folder, normalizedQuery, 100);
+        allSymbols = [...indexedSymbols, ...dependencySymbols];
+      }
+    }
     const ranked: RankedSymbol[] = [];
     let indexedModuleRoot: string | undefined;
 

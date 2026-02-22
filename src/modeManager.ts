@@ -37,6 +37,9 @@ type GovernorSelection =
   | 'action:open-config'
   | 'action:create-config'
   | 'action:restart-native'
+  | 'action:dependency-jdk-status'
+  | 'action:sync-classpath'
+  | 'action:fetch-dependency-sources'
   | 'action:idle-audit';
 
 interface GovernorQuickPickItem extends vscode.QuickPickItem {
@@ -529,6 +532,18 @@ export class ModeManager implements vscode.Disposable {
         selection: 'action:restart-native'
       },
       {
+        label: vscode.l10n.t('Dependency JDK Status'),
+        selection: 'action:dependency-jdk-status'
+      },
+      {
+        label: vscode.l10n.t('Sync Classpath'),
+        selection: 'action:sync-classpath'
+      },
+      {
+        label: vscode.l10n.t('Fetch Dependency Sources'),
+        selection: 'action:fetch-dependency-sources'
+      },
+      {
         label: vscode.l10n.t('Run Idle CPU Audit (30s)'),
         selection: 'action:idle-audit'
       }
@@ -596,6 +611,21 @@ export class ModeManager implements vscode.Disposable {
 
     if (selection === 'action:restart-native') {
       await vscode.commands.executeCommand('scalaLite.restartNativeEngine');
+      return;
+    }
+
+    if (selection === 'action:dependency-jdk-status') {
+      await vscode.commands.executeCommand('scalaLite.dependencyJdkStatus');
+      return;
+    }
+
+    if (selection === 'action:sync-classpath') {
+      await vscode.commands.executeCommand('scalaLite.syncClasspath');
+      return;
+    }
+
+    if (selection === 'action:fetch-dependency-sources') {
+      await vscode.commands.executeCommand('scalaLite.fetchDependencySources');
       return;
     }
 

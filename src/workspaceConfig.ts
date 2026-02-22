@@ -20,7 +20,9 @@ export const WORKSPACE_CONFIG_TOP_LEVEL_KEYS = [
   'linter',
   'workspaceDoctor',
   'logLevel',
-  'testFrameworkHints'
+  'testFrameworkHints',
+  'deps',
+  'build'
 ] as const;
 
 type _WorkspaceConfigTopLevelKey = (typeof WORKSPACE_CONFIG_TOP_LEVEL_KEYS)[number];
@@ -76,6 +78,54 @@ export interface WorkspaceDoctorConfig {
   readonly autoRunOnOpen?: boolean;
 }
 
+export interface DependencyConfig {
+  readonly enabled?: boolean;
+  readonly includeInWorkspaceSymbol?: boolean;
+  readonly indexTestScope?: boolean;
+  readonly cache?: {
+    readonly enabled?: boolean;
+  };
+  readonly indexCaps?: {
+    readonly maxJars?: number;
+    readonly maxIndexTimeSeconds?: number;
+  };
+  readonly jdkModules?: readonly string[];
+}
+
+export interface BuildConfig {
+  readonly classpathProvider?: 'auto' | 'maven' | 'sbt';
+  readonly jdkHome?: string;
+  readonly maven?: {
+    readonly profiles?: readonly string[];
+    readonly args?: readonly string[];
+    readonly wrapperPath?: string;
+  };
+  readonly sbt?: {
+    readonly args?: readonly string[];
+    readonly strategy?: 'auto' | 'coursier' | 'sbt-show';
+  };
+}
+
+export interface EffectiveDependencyConfig {
+  readonly enabled: boolean;
+  readonly includeInWorkspaceSymbol: boolean;
+  readonly indexTestScope: boolean;
+  readonly cacheEnabled: boolean;
+  readonly maxJars: number;
+  readonly maxIndexTimeSeconds: number;
+  readonly jdkModules: readonly string[];
+}
+
+export interface EffectiveBuildConfig {
+  readonly classpathProvider: 'auto' | 'maven' | 'sbt';
+  readonly jdkHome?: string;
+  readonly mavenProfiles: readonly string[];
+  readonly mavenArgs: readonly string[];
+  readonly mavenWrapperPath?: string;
+  readonly sbtArgs: readonly string[];
+  readonly sbtStrategy: 'auto' | 'coursier' | 'sbt-show';
+}
+
 interface ScalaLiteWorkspaceConfig {
   readonly mode?: WorkspaceMode | {
     readonly default?: WorkspaceMode;
@@ -93,6 +143,8 @@ interface ScalaLiteWorkspaceConfig {
   readonly linter?: LinterConfig;
   readonly workspaceDoctor?: WorkspaceDoctorConfig;
   readonly testFrameworkHints?: readonly string[];
+  readonly deps?: DependencyConfig;
+  readonly build?: BuildConfig;
   readonly [key: string]: unknown;
 }
 
@@ -372,6 +424,32 @@ export function buildDefaultWorkspaceConfig(buildTool: BuildTool = 'sbt'): Scala
     workspaceDoctor: {
       autoRunOnOpen: false
     },
+    deps: {
+      enabled: true,
+      includeInWorkspaceSymbol: false,
+      indexTestScope: false,
+      cache: {
+        enabled: true
+      },
+      indexCaps: {
+        maxJars: 500,
+        maxIndexTimeSeconds: 120
+      },
+      jdkModules: ['java.base']
+    },
+    build: {
+      classpathProvider: 'auto',
+      jdkHome: '',
+      maven: {
+        profiles: [],
+        args: [],
+        wrapperPath: ''
+      },
+      sbt: {
+        args: [],
+        strategy: 'sbt-show'
+      }
+    },
     logLevel: 'INFO',
     testFrameworkHints: []
   };
@@ -489,6 +567,22 @@ export async function writeIndexedModuleFolderToWorkspaceConfig(relativePath: st
     ...existing,
     moduleFolder: relativePath,
     indexedModuleFolder: relativePath
+  });
+}
+
+export async function writeClasspathProviderToWorkspaceConfig(provider: 'auto' | 'maven' | 'sbt'): Promise<void> {
+  const folder = getPrimaryWorkspaceFolder();
+  if (!folder) {
+    return;
+  }
+
+  const existing = await readConfig(folder);
+  await writeConfig(folder, {
+    ...existing,
+    build: {
+      ...(existing.build ?? {}),
+      classpathProvider: provider
+    }
   });
 }
 
@@ -666,6 +760,94 @@ export async function readLinterConfigFromWorkspaceConfig(): Promise<LinterConfi
   return {
     ...linter,
     path: linter.path ?? linter.scalafixPath
+  };
+}
+
+function normalizedStringArray(value: readonly string[] | undefined): readonly string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .filter((entry): entry is string => typeof entry === 'string')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
+export async function readDependencyConfigFromWorkspaceConfig(): Promise<EffectiveDependencyConfig> {
+  const folder = getPrimaryWorkspaceFolder();
+  if (!folder) {
+    return {
+      enabled: true,
+      includeInWorkspaceSymbol: false,
+      indexTestScope: false,
+      cacheEnabled: true,
+      maxJars: 500,
+      maxIndexTimeSeconds: 120,
+      jdkModules: ['java.base']
+    };
+  }
+
+  const config = await readConfig(folder);
+  const deps = config.deps ?? {};
+
+  const maxJars = typeof deps.indexCaps?.maxJars === 'number' && Number.isFinite(deps.indexCaps.maxJars) && deps.indexCaps.maxJars > 0
+    ? Math.round(deps.indexCaps.maxJars)
+    : 500;
+  const maxIndexTimeSeconds = typeof deps.indexCaps?.maxIndexTimeSeconds === 'number'
+      && Number.isFinite(deps.indexCaps.maxIndexTimeSeconds)
+      && deps.indexCaps.maxIndexTimeSeconds > 0
+    ? Math.round(deps.indexCaps.maxIndexTimeSeconds)
+    : 120;
+  const jdkModules = normalizedStringArray(deps.jdkModules);
+
+  return {
+    enabled: deps.enabled !== false,
+    includeInWorkspaceSymbol: deps.includeInWorkspaceSymbol === true,
+    indexTestScope: deps.indexTestScope === true,
+    cacheEnabled: deps.cache?.enabled !== false,
+    maxJars,
+    maxIndexTimeSeconds,
+    jdkModules: jdkModules.length > 0 ? jdkModules : ['java.base']
+  };
+}
+
+export async function readBuildConfigFromWorkspaceConfig(): Promise<EffectiveBuildConfig> {
+  const folder = getPrimaryWorkspaceFolder();
+  if (!folder) {
+    return {
+      classpathProvider: 'auto',
+      mavenProfiles: [],
+      mavenArgs: [],
+      sbtArgs: [],
+      sbtStrategy: 'sbt-show'
+    };
+  }
+
+  const config = await readConfig(folder);
+  const build = config.build ?? {};
+  const classpathProvider = build.classpathProvider === 'maven' || build.classpathProvider === 'sbt'
+    ? build.classpathProvider
+    : 'auto';
+  const sbtStrategy = build.sbt?.strategy === 'auto' || build.sbt?.strategy === 'coursier' || build.sbt?.strategy === 'sbt-show'
+    ? build.sbt.strategy
+    : 'sbt-show';
+
+  const jdkHome = typeof build.jdkHome === 'string' && build.jdkHome.trim().length > 0
+    ? build.jdkHome.trim()
+    : undefined;
+  const mavenWrapperPath = typeof build.maven?.wrapperPath === 'string' && build.maven.wrapperPath.trim().length > 0
+    ? build.maven.wrapperPath.trim()
+    : undefined;
+
+  return {
+    classpathProvider,
+    jdkHome,
+    mavenProfiles: normalizedStringArray(build.maven?.profiles),
+    mavenArgs: normalizedStringArray(build.maven?.args),
+    mavenWrapperPath,
+    sbtArgs: normalizedStringArray(build.sbt?.args),
+    sbtStrategy
   };
 }
 

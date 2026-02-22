@@ -105,7 +105,7 @@ export async function syncMavenClasspathWithJdk(
       profiles: options.buildConfig.mavenProfiles,
       extraArgs: options.buildConfig.mavenArgs,
       wrapperPathOverride: options.buildConfig.mavenWrapperPath,
-      timeoutMs: options.timeoutMs ?? 60_000,
+      timeoutMs: options.timeoutMs ?? 120_000,
       cancellationToken: options.cancellationToken,
       onOutput: options.onOutput
     }),
@@ -158,7 +158,7 @@ export async function syncSbtClasspathWithJdk(
       includeTestScope: options.dependencyConfig.indexTestScope,
       strategy: options.buildConfig.sbtStrategy,
       extraArgs: options.buildConfig.sbtArgs,
-      timeoutMs: options.timeoutMs ?? 60_000,
+      timeoutMs: options.timeoutMs ?? 120_000,
       cancellationToken: options.cancellationToken,
       onOutput: options.onOutput
     }),

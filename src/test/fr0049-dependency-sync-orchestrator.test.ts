@@ -27,4 +27,5 @@ test('FR-0049: Maven sync orchestration composes classpath + JDK resolution and 
   assert.equal(source.includes('selectedJdkModuleCount'), true);
   assert.equal(source.includes('availableJdkModuleCount'), true);
   assert.equal(source.includes('syncSbtClasspathWithJdk'), true);
+  assert.equal(source.includes('timeoutMs: options.timeoutMs ?? 120_000'), true);
 });

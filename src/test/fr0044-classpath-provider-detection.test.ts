@@ -22,5 +22,7 @@ test('FR-0044: classpath provider detection checks wrappers and supports user pr
   assert.equal(source.includes("findExists(workspace, folder, 'mvnw')"), true);
   assert.equal(source.includes("findExists(workspace, folder, 'mvnw.cmd')"), true);
   assert.equal(source.includes("findExists(workspace, folder, 'sbt')"), true);
+  assert.equal(source.includes("findExists(workspace, folder, 'sbt.bat')"), true);
+  assert.equal(source.includes("findExists(workspace, folder, 'sbt.cmd')"), true);
   assert.equal(source.includes('options?.promptUser'), true);
 });

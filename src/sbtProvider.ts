@@ -77,12 +77,8 @@ function parseSbtClasspath(output: string): readonly string[] {
   return Array.from(new Set(parsed));
 }
 
-function chooseStrategy(strategy: 'auto' | 'coursier' | 'sbt-show'): 'coursier' | 'sbt-show' {
-  if (strategy === 'coursier') {
-    return 'coursier';
-  }
-
-  return 'sbt-show';
+function chooseStrategy(strategy: 'auto' | 'coursier' | 'sbt-show'): 'auto' | 'coursier' | 'sbt-show' {
+  return strategy;
 }
 
 function buildSbtCommands(
@@ -149,11 +145,13 @@ async function writeClasspathCache(
   return cacheUri.fsPath;
 }
 
-export async function resolveSbtClasspath(options: ResolveSbtClasspathOptions): Promise<SbtClasspathResult> {
+async function runSbtClasspathWithStrategy(
+  options: ResolveSbtClasspathOptions,
+  strategy: 'coursier' | 'sbt-show'
+): Promise<SbtClasspathResult> {
   const workspaceRoot = options.workspaceFolder.uri.fsPath;
-  const strategyUsed = chooseStrategy(options.strategy);
   const executable = await resolveSbtExecutable(workspaceRoot);
-  const commands = buildSbtCommands(strategyUsed, options.includeTestScope);
+  const commands = buildSbtCommands(strategy, options.includeTestScope);
 
   const args: string[] = ['-no-colors', ...options.extraArgs, ...commands];
 
@@ -183,12 +181,25 @@ export async function resolveSbtClasspath(options: ResolveSbtClasspathOptions): 
   const classpathEntries = parseSbtClasspath(result.combinedOutput);
   const jars = classpathEntries.filter((entry) => entry.endsWith('.jar'));
   const outputDirs = buildOutputDirs(workspaceRoot, options.includeTestScope);
-  const cacheFilePath = await writeClasspathCache(options.workspaceFolder, jars, outputDirs, strategyUsed);
+  const cacheFilePath = await writeClasspathCache(options.workspaceFolder, jars, outputDirs, strategy);
 
   return {
     jars,
     outputDirs,
     cacheFilePath,
-    strategyUsed
+    strategyUsed: strategy
   };
+}
+
+export async function resolveSbtClasspath(options: ResolveSbtClasspathOptions): Promise<SbtClasspathResult> {
+  const strategy = chooseStrategy(options.strategy);
+  if (strategy === 'coursier' || strategy === 'sbt-show') {
+    return runSbtClasspathWithStrategy(options, strategy);
+  }
+
+  try {
+    return await runSbtClasspathWithStrategy(options, 'coursier');
+  } catch {
+    return runSbtClasspathWithStrategy(options, 'sbt-show');
+  }
 }

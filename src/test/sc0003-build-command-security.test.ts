@@ -24,3 +24,10 @@ test('SC-0003: secure build executor supports timeout, cancellation, and output 
   assert.equal(source.includes('setTimeout(() =>'), true);
   assert.equal(source.includes('redactSensitiveOutput'), true);
 });
+
+test('SC-0003: extension redacts streamed build output before logging RUN lines', () => {
+  const source = readSource('src/extension.ts');
+
+  assert.equal(source.includes('redactSensitiveOutput(line).trim()'), true);
+  assert.equal(source.includes("logger.info('RUN', safeLine)"), true);
+});

@@ -24,4 +24,5 @@ test('TC-0009: workspace symbol integration includes dependency symbols when ena
   assert.equal(source.includes('readDependencyConfigFromWorkspaceConfig'), true);
   assert.equal(source.includes('queryDependencySymbols'), true);
   assert.equal(source.includes('includeInWorkspaceSymbol'), true);
+  assert.equal(source.includes('dependencyConfig.enabled && dependencyConfig.includeInWorkspaceSymbol'), true);
 });

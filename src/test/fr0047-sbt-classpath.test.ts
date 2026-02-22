@@ -16,6 +16,9 @@ test('FR-0047: SBT provider resolves classpath via secure build command executio
   assert.equal(source.includes("'show Compile / fullClasspath'"), true);
   assert.equal(source.includes("'show Test / fullClasspath'"), true);
   assert.equal(source.includes('writeClasspathCache'), true);
+  assert.equal(source.includes("if (strategy === 'coursier' || strategy === 'sbt-show')"), true);
+  assert.equal(source.includes("runSbtClasspathWithStrategy(options, 'coursier')"), true);
+  assert.equal(source.includes("runSbtClasspathWithStrategy(options, 'sbt-show')"), true);
 });
 
 test('FR-0047: sync command is wired to SBT orchestration path', () => {

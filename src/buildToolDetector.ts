@@ -182,15 +182,26 @@ export async function detectClasspathProvider(
   options?: ClasspathProviderChoiceOptions,
   workspace: typeof vscode.workspace = vscode.workspace
 ): Promise<ClasspathProviderDetectionResult> {
-  const [hasSbtBuild, hasMavenPom, hasSbtWrapper, hasMavenWrapperUnix, hasMavenWrapperCmd] = await Promise.all([
+  const [
+    hasSbtBuild,
+    hasMavenPom,
+    hasSbtWrapperUnix,
+    hasSbtWrapperBat,
+    hasSbtWrapperCmd,
+    hasMavenWrapperUnix,
+    hasMavenWrapperCmd
+  ] = await Promise.all([
     findExists(workspace, folder, 'build.sbt'),
     findExists(workspace, folder, 'pom.xml'),
     findExists(workspace, folder, 'sbt'),
+    findExists(workspace, folder, 'sbt.bat'),
+    findExists(workspace, folder, 'sbt.cmd'),
     findExists(workspace, folder, 'mvnw'),
     findExists(workspace, folder, 'mvnw.cmd')
   ]);
 
   const hasMavenWrapper = hasMavenWrapperUnix || hasMavenWrapperCmd;
+  const hasSbtWrapper = hasSbtWrapperUnix || hasSbtWrapperBat || hasSbtWrapperCmd;
 
   const provider = await chooseClasspathProvider(
     hasMavenPom,

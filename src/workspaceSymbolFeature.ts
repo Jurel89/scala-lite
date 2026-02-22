@@ -115,7 +115,7 @@ export class WorkspaceSymbolSearchProvider implements vscode.WorkspaceSymbolProv
     if (mode === 'C' && normalizedQuery.length > 0) {
       const dependencyConfig = await readDependencyConfigFromWorkspaceConfig();
       const folder = vscode.workspace.workspaceFolders?.[0];
-      if (dependencyConfig.includeInWorkspaceSymbol && folder) {
+      if (dependencyConfig.enabled && dependencyConfig.includeInWorkspaceSymbol && folder) {
         const dependencySymbols = await queryDependencySymbols(folder, normalizedQuery, 100);
         allSymbols = [...indexedSymbols, ...dependencySymbols];
       }

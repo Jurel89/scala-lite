@@ -105,6 +105,10 @@ function commandLink(command: string, arg: string): string {
   return `command:${command}?${encodedArgs}`;
 }
 
+function escapeMarkdown(value: string): string {
+  return value.replace(/[\\`*_{}\[\]()#+!|]/g, '\\$&');
+}
+
 async function readDefinitionPreview(filePath: string, lineNumber: number, maxPreviewLines: number): Promise<string | undefined> {
   try {
     const uri = vscode.Uri.file(filePath);
@@ -273,17 +277,25 @@ export class HoverInfoProvider implements vscode.HoverProvider {
     ]);
 
     const markdown = new vscode.MarkdownString(undefined, true);
-    markdown.appendMarkdown(`### ${symbolKindCodicon(preferred.symbolKind)} ${preferred.symbolName}\n\n`);
+    markdown.appendMarkdown(`### ${symbolKindCodicon(preferred.symbolKind)} `);
+    markdown.appendMarkdown(escapeMarkdown(preferred.symbolName));
+    markdown.appendMarkdown('\n\n');
     markdown.appendMarkdown(`**${vscode.l10n.t('Kind')}**: ${kindLabel(preferred.symbolKind)}  \n`);
     markdown.appendMarkdown(`**${vscode.l10n.t('Confidence')}**: ${resolved.confidence.toUpperCase()}  \n`);
-    markdown.appendMarkdown(`**${vscode.l10n.t('Defined at')}**: ${toRelativePath(preferred.filePath)}:${preferred.lineNumber}  \n`);
+    markdown.appendMarkdown(`**${vscode.l10n.t('Defined at')}**: `);
+    markdown.appendMarkdown(escapeMarkdown(`${toRelativePath(preferred.filePath)}:${preferred.lineNumber}`));
+    markdown.appendMarkdown('  \n');
 
     if (preferred.containerName) {
-      markdown.appendMarkdown(`**${vscode.l10n.t('Container')}**: ${preferred.containerName}  \n`);
+      markdown.appendMarkdown(`**${vscode.l10n.t('Container')}**: `);
+      markdown.appendMarkdown(escapeMarkdown(preferred.containerName));
+      markdown.appendMarkdown('  \n');
     }
 
     if (preferred.packageName) {
-      markdown.appendMarkdown(`**${vscode.l10n.t('Package')}**: ${preferred.packageName}  \n`);
+      markdown.appendMarkdown(`**${vscode.l10n.t('Package')}**: `);
+      markdown.appendMarkdown(escapeMarkdown(preferred.packageName));
+      markdown.appendMarkdown('  \n');
     }
 
     if (signatureLine) {
@@ -327,15 +339,19 @@ export class HoverInfoProvider implements vscode.HoverProvider {
     wordRange: vscode.Range
   ): Promise<vscode.Hover> {
     const markdown = new vscode.MarkdownString(undefined, true);
-    markdown.isTrusted = true;
-    markdown.appendMarkdown(`### ${symbolName}\n\n`);
+    markdown.appendMarkdown('### ');
+    markdown.appendMarkdown(escapeMarkdown(symbolName));
+    markdown.appendMarkdown('\n\n');
     markdown.appendMarkdown(`${vscode.l10n.t('Dependency candidate found from classpath index.')}  \n`);
-    markdown.appendMarkdown(`**${vscode.l10n.t('Defined at')}**: ${toRelativePath(resolved.symbol.filePath)}:${resolved.symbol.lineNumber}  \n`);
+    markdown.appendMarkdown(`**${vscode.l10n.t('Defined at')}**: `);
+    markdown.appendMarkdown(escapeMarkdown(`${toRelativePath(resolved.symbol.filePath)}:${resolved.symbol.lineNumber}`));
+    markdown.appendMarkdown('  \n');
 
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
     if (workspaceFolder) {
       const attachment = await readDependencyAttachmentForPath(workspaceFolder, resolved.symbol.filePath);
       if (attachment?.sourcesPath || attachment?.javadocPath) {
+        markdown.isTrusted = true;
         markdown.appendMarkdown(`\n**${vscode.l10n.t('Dependency Artifacts')}**\n`);
         if (attachment.sourcesPath) {
           markdown.appendMarkdown(`- [${vscode.l10n.t('Open sources jar')}](${commandLink('scalaLite.openDependencyAttachment', attachment.sourcesPath)})\n`);
@@ -357,8 +373,9 @@ export class HoverInfoProvider implements vscode.HoverProvider {
     token: vscode.CancellationToken
   ): Promise<vscode.Hover> {
     const markdown = new vscode.MarkdownString(undefined, true);
-    markdown.isTrusted = true;
-    markdown.appendMarkdown(`### ${symbolName} — ${vscode.l10n.t('ambiguous ({0} matches)', String(resolved.candidates.length))}\n\n`);
+    markdown.appendMarkdown('### ');
+    markdown.appendMarkdown(escapeMarkdown(symbolName));
+    markdown.appendMarkdown(` — ${vscode.l10n.t('ambiguous ({0} matches)', String(resolved.candidates.length))}\n\n`);
     markdown.appendMarkdown(`${vscode.l10n.t('Top candidates:')}\n`);
 
     const rankedCandidates = [...resolved.candidates].sort((left, right) => compareSymbols(left, right)).slice(0, 5);
@@ -376,13 +393,22 @@ export class HoverInfoProvider implements vscode.HoverProvider {
       const entry = rankedCandidates[index];
       const preview = previewLines[index]?.trim();
       const descriptor = entry.containerName || entry.packageName || '-';
-      markdown.appendMarkdown(`- ${symbolKindCodicon(entry.symbolKind)} ${entry.symbolName} — ${descriptor} — ${toRelativePath(entry.filePath)}:${entry.lineNumber}\n`);
+      markdown.appendMarkdown(`- ${symbolKindCodicon(entry.symbolKind)} `);
+      markdown.appendMarkdown(escapeMarkdown(entry.symbolName));
+      markdown.appendMarkdown(' — ');
+      markdown.appendMarkdown(escapeMarkdown(descriptor));
+      markdown.appendMarkdown(' — ');
+      markdown.appendMarkdown(escapeMarkdown(`${toRelativePath(entry.filePath)}:${entry.lineNumber}`));
+      markdown.appendMarkdown('\n');
       if (preview) {
-        markdown.appendMarkdown(`  - ${preview}\n`);
+        markdown.appendMarkdown('  - ');
+        markdown.appendMarkdown(escapeMarkdown(preview));
+        markdown.appendMarkdown('\n');
       }
     }
 
     const openPicker = vscode.Uri.parse('command:editor.action.revealDefinition').toString();
+    markdown.isTrusted = true;
     markdown.appendMarkdown(`\n[${vscode.l10n.t('Open definition picker (F12)')}](${openPicker})`);
     markdown.appendMarkdown(`  \n${vscode.l10n.t('Choosing a definition pins this symbol/location in the sticky cache.')}`);
     return new vscode.Hover(markdown, wordRange);

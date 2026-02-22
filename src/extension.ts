@@ -8,6 +8,7 @@ import { BuildTool } from './buildToolInference';
 import { runIdleCpuAudit } from './idleCpuAudit';
 import { ModeManager } from './modeManager';
 import { WorkspaceMode } from './modePresentation';
+import { redactSensitiveOutput } from './buildCommandExecutor';
 import {
   openOrCreateWorkspaceConfig,
   readBuildConfigFromWorkspaceConfig,
@@ -437,7 +438,7 @@ export function activate(context: vscode.ExtensionContext): void {
         {
           location: vscode.ProgressLocation.Notification,
           cancellable: true,
-          title: vscode.l10n.t('Resolving Maven classpath...')
+          title: vscode.l10n.t('Resolving classpath...')
         },
         async (progress, token) => {
           progress.report({ message: prepared.provider === 'sbt'
@@ -451,8 +452,9 @@ export function activate(context: vscode.ExtensionContext): void {
               dependencyConfig,
               cancellationToken: token,
               onOutput: (line) => {
-                if (line.trim().length > 0) {
-                  logger.info('RUN', line.trim());
+                const safeLine = redactSensitiveOutput(line).trim();
+                if (safeLine.length > 0) {
+                  logger.info('RUN', safeLine);
                 }
               }
             })
@@ -463,8 +465,9 @@ export function activate(context: vscode.ExtensionContext): void {
               dependencyConfig,
               cancellationToken: token,
               onOutput: (line) => {
-                if (line.trim().length > 0) {
-                  logger.info('RUN', line.trim());
+                const safeLine = redactSensitiveOutput(line).trim();
+                if (safeLine.length > 0) {
+                  logger.info('RUN', safeLine);
                 }
               }
             });
@@ -541,8 +544,9 @@ export function activate(context: vscode.ExtensionContext): void {
             buildConfig,
             cancellationToken: token,
             onOutput: (line) => {
-              if (line.trim().length > 0) {
-                logger.info('RUN', line.trim());
+              const safeLine = redactSensitiveOutput(line).trim();
+              if (safeLine.length > 0) {
+                logger.info('RUN', safeLine);
               }
             }
           });

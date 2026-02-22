@@ -123,6 +123,7 @@
   "Scala Lite dependency cache reset.": "Scala Lite dependency cache reset.",
   "No Maven modules found. Ensure pom.xml exists at workspace root.": "No Maven modules found. Ensure pom.xml exists at workspace root.",
   "Select Maven module for classpath sync": "Select Maven module for classpath sync",
+  "Resolving classpath...": "Resolving classpath...",
   "Resolving Maven classpath...": "Resolving Maven classpath...",
   "Running SBT classpath resolution": "Running SBT classpath resolution",
   "Running Maven dependency:build-classpath": "Running Maven dependency:build-classpath",

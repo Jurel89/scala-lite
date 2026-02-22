@@ -16,6 +16,8 @@ test('FR-0056: hover includes dependency artifact section with source/javadoc op
   assert.equal(source.includes('scalaLite.openDependencyAttachment'), true);
   assert.equal(source.includes('Open sources jar'), true);
   assert.equal(source.includes('Open javadoc jar'), true);
+  assert.equal(source.includes('escapeMarkdown(preferred.symbolName)'), true);
+  assert.equal(source.includes('escapeMarkdown(symbolName)'), true);
 });
 
 test('FR-0056: extension registers dependency attachment open command', () => {

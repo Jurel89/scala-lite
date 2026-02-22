@@ -22,4 +22,5 @@ test('FR-0046: Maven classpath resolution runs dependency:build-classpath and wr
   assert.equal(source.includes('dependency:build-classpath'), true);
   assert.equal(source.includes('classpath-'), true);
   assert.equal(source.includes('writeClasspathCache'), true);
+  assert.equal(source.includes("scope: includeTestScope ? 'compile+test' : 'compile'"), true);
 });

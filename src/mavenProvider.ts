@@ -278,7 +278,8 @@ async function writeClasspathCache(
   module: MavenModule,
   jars: readonly string[],
   outputDirs: readonly string[],
-  profiles: readonly string[]
+  profiles: readonly string[],
+  includeTestScope: boolean
 ): Promise<string> {
   await ensureScalaLiteCacheDir(workspaceFolder);
   const cacheRoot = getScalaLiteCacheUri(workspaceFolder);
@@ -294,7 +295,7 @@ async function writeClasspathCache(
     module: module.artifactId,
     modulePath: module.path,
     resolvedAt: new Date().toISOString(),
-    scope: 'compile',
+    scope: includeTestScope ? 'compile+test' : 'compile',
     jars,
     outputDirs,
     mavenProfiles: [...profiles]
@@ -355,7 +356,8 @@ export async function resolveMavenClasspath(options: ResolveMavenClasspathOption
       options.module,
       jars,
       outputDirs,
-      options.profiles
+      options.profiles,
+      options.includeTestScope
     );
 
     return {

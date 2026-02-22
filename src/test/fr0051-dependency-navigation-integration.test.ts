@@ -13,7 +13,9 @@ test('FR-0051: go-to-definition Stage E merges dependency cache candidates', () 
 
   assert.equal(source.includes('queryDependencySymbols'), true);
   assert.equal(source.includes('dependencyMatches'), true);
-  assert.equal(source.includes("entry.filePath.endsWith('.jar')"), true);
+  assert.equal(source.includes('readDependencyConfigFromWorkspaceConfig'), true);
+  assert.equal(source.includes("if (mode === 'C')"), true);
+  assert.equal(source.includes('const candidates = [...nativeMatches]'), true);
 });
 
 test('FR-0051: dependency symbol query prefers attached source paths when present', () => {

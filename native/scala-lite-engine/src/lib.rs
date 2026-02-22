@@ -8,12 +8,12 @@ use thiserror::Error;
 mod dep_index;
 
 pub use dep_index::{
-    build_dependency_snapshot, changed_jar_paths, dependency_index_is_stale, get_dep_index_stats,
-    load_dependency_index, query_dep_symbol_by_fqcn, query_dep_symbols, query_dep_symbols_in_package,
+    build_dependency_snapshot, changed_jar_paths, dependency_index_is_stale,
+    evict_dependency_index_segments, get_dep_index_stats, load_dependency_index,
+    query_dep_symbol_by_fqcn, query_dep_symbols, query_dep_symbols_in_package,
     save_dependency_index, set_dependency_index_max_loaded_segments, ClassKind, DepIndexStats,
     DepSegment, DepSymbolEntry, DependencySnapshot, DependencySymbol, DependencySymbolInput,
     JarManifest, SegmentLookupEntry, Visibility, DEPENDENCY_INDEX_SCHEMA_VERSION,
-    evict_dependency_index_segments,
 };
 
 #[cfg(feature = "napi")]
@@ -287,7 +287,9 @@ pub enum EngineError {
 const MAX_PARALLEL_JAR_WORKERS: usize = 8;
 
 pub fn compute_parallel_jar_worker_count() -> usize {
-    let available = available_parallelism().map(|value| value.get()).unwrap_or(1);
+    let available = available_parallelism()
+        .map(|value| value.get())
+        .unwrap_or(1);
     let half = std::cmp::max(1, available / 2);
     std::cmp::min(half, MAX_PARALLEL_JAR_WORKERS)
 }
@@ -383,7 +385,11 @@ fn extract_dependency_symbols_from_jar(jar_path: &str) -> Vec<DependencySymbolIn
         }
     }
 
-    symbols.sort_by(|left, right| left.fqcn.cmp(&right.fqcn).then(left.jar_path.cmp(&right.jar_path)));
+    symbols.sort_by(|left, right| {
+        left.fqcn
+            .cmp(&right.fqcn)
+            .then(left.jar_path.cmp(&right.jar_path))
+    });
     symbols.dedup_by(|left, right| left.fqcn == right.fqcn && left.jar_path == right.jar_path);
     symbols
 }
@@ -1509,7 +1515,10 @@ val publicValue = 42
         assert_eq!(first, second);
 
         let ordered_paths: Vec<&str> = first.iter().map(|entry| entry.jar_path.as_str()).collect();
-        assert_eq!(ordered_paths, vec!["alpha.jar", "alpha.jar", "beta.jar", "zeta.jar"]);
+        assert_eq!(
+            ordered_paths,
+            vec!["alpha.jar", "alpha.jar", "beta.jar", "zeta.jar"]
+        );
     }
 
     #[test]
@@ -1523,12 +1532,12 @@ val publicValue = 42
 #[cfg(feature = "napi")]
 mod napi_bridge {
     use super::{
-        append_files, build_dependency_snapshot, evict_dependency_index_segments, get_dep_index_stats,
-        get_diagnostics, get_memory_usage, load_dependency_index, parse_file,
-        query_dep_symbol_by_fqcn, query_dep_symbols, query_dep_symbols_in_package, query_package_exists,
-        query_symbols, query_symbols_in_package, save_dependency_index,
-        set_dependency_index_max_loaded_segments, ClassKind, DiagnosticEntry, FileInput, IndexSnapshot,
-        JarManifest, MemoryUsage, ParseFileResult, SymbolEntry, Visibility,
+        append_files, build_dependency_snapshot, evict_dependency_index_segments,
+        get_dep_index_stats, get_diagnostics, get_memory_usage, load_dependency_index, parse_file,
+        query_dep_symbol_by_fqcn, query_dep_symbols, query_dep_symbols_in_package,
+        query_package_exists, query_symbols, query_symbols_in_package, save_dependency_index,
+        set_dependency_index_max_loaded_segments, ClassKind, DiagnosticEntry, FileInput,
+        IndexSnapshot, JarManifest, MemoryUsage, ParseFileResult, SymbolEntry, Visibility,
     };
     use napi::bindgen_prelude::{Error, Result};
     use napi_derive::napi;
@@ -1812,7 +1821,11 @@ mod napi_bridge {
                 symbols.extend(super::extract_dependency_symbols_from_jar(jar_path));
             }
 
-            symbols.sort_by(|left, right| left.fqcn.cmp(&right.fqcn).then(left.jar_path.cmp(&right.jar_path)));
+            symbols.sort_by(|left, right| {
+                left.fqcn
+                    .cmp(&right.fqcn)
+                    .then(left.jar_path.cmp(&right.jar_path))
+            });
             let snapshot = build_dependency_snapshot(&symbols, &manifests);
             if let Some(max_segments) = options.and_then(|value| value._max_segments) {
                 set_dependency_index_max_loaded_segments(
@@ -1858,9 +1871,9 @@ mod napi_bridge {
                 .dep_indexes
                 .lock()
                 .map_err(|_| Error::from_reason("dependency index lock poisoned".to_string()))?;
-            let snapshot = guard
-                .get(&handle)
-                .ok_or_else(|| Error::from_reason(format!("dependency index handle not found: {handle}")))?;
+            let snapshot = guard.get(&handle).ok_or_else(|| {
+                Error::from_reason(format!("dependency index handle not found: {handle}"))
+            })?;
 
             let symbols = query_dep_symbols(snapshot, &name, limit)
                 .map_err(|error| Error::from_reason(error.to_string()))?;
@@ -1877,9 +1890,9 @@ mod napi_bridge {
                 .dep_indexes
                 .lock()
                 .map_err(|_| Error::from_reason("dependency index lock poisoned".to_string()))?;
-            let snapshot = guard
-                .get(&handle)
-                .ok_or_else(|| Error::from_reason(format!("dependency index handle not found: {handle}")))?;
+            let snapshot = guard.get(&handle).ok_or_else(|| {
+                Error::from_reason(format!("dependency index handle not found: {handle}"))
+            })?;
 
             let symbol = query_dep_symbol_by_fqcn(snapshot, &fqcn)
                 .map_err(|error| Error::from_reason(error.to_string()))?;
@@ -1898,9 +1911,9 @@ mod napi_bridge {
                 .dep_indexes
                 .lock()
                 .map_err(|_| Error::from_reason("dependency index lock poisoned".to_string()))?;
-            let snapshot = guard
-                .get(&handle)
-                .ok_or_else(|| Error::from_reason(format!("dependency index handle not found: {handle}")))?;
+            let snapshot = guard.get(&handle).ok_or_else(|| {
+                Error::from_reason(format!("dependency index handle not found: {handle}"))
+            })?;
 
             let symbols = query_dep_symbols_in_package(snapshot, &name, &package_path, limit)
                 .map_err(|error| Error::from_reason(error.to_string()))?;
@@ -1913,9 +1926,9 @@ mod napi_bridge {
                 .dep_indexes
                 .lock()
                 .map_err(|_| Error::from_reason("dependency index lock poisoned".to_string()))?;
-            let snapshot = guard
-                .get(&handle)
-                .ok_or_else(|| Error::from_reason(format!("dependency index handle not found: {handle}")))?;
+            let snapshot = guard.get(&handle).ok_or_else(|| {
+                Error::from_reason(format!("dependency index handle not found: {handle}"))
+            })?;
 
             let stats = get_dep_index_stats(snapshot);
             Ok(JsDepIndexStats {
@@ -1933,14 +1946,20 @@ mod napi_bridge {
                 .dep_indexes
                 .lock()
                 .map_err(|_| Error::from_reason("dependency index lock poisoned".to_string()))?;
-            let snapshot = guard
-                .get(&handle)
-                .ok_or_else(|| Error::from_reason(format!("dependency index handle not found: {handle}")))?;
+            let snapshot = guard.get(&handle).ok_or_else(|| {
+                Error::from_reason(format!("dependency index handle not found: {handle}"))
+            })?;
 
             let loaded = snapshot.loaded_segments.borrow();
             let loaded_symbol_count = loaded
                 .values()
-                .map(|segment| segment.by_simple_name.values().map(std::vec::Vec::len).sum::<usize>())
+                .map(|segment| {
+                    segment
+                        .by_simple_name
+                        .values()
+                        .map(std::vec::Vec::len)
+                        .sum::<usize>()
+                })
                 .sum::<usize>();
 
             let estimated_bytes = loaded
@@ -1973,9 +1992,9 @@ mod napi_bridge {
                 .dep_indexes
                 .lock()
                 .map_err(|_| Error::from_reason("dependency index lock poisoned".to_string()))?;
-            let snapshot = guard
-                .get(&handle)
-                .ok_or_else(|| Error::from_reason(format!("dependency index handle not found: {handle}")))?;
+            let snapshot = guard.get(&handle).ok_or_else(|| {
+                Error::from_reason(format!("dependency index handle not found: {handle}"))
+            })?;
 
             let normalized = max_segments.map(|value| value.max(0) as usize);
             set_dependency_index_max_loaded_segments(snapshot, normalized);
@@ -1983,14 +2002,18 @@ mod napi_bridge {
         }
 
         #[napi]
-        pub fn evict_dependency_index_segments(&self, handle: u32, max_segments: i32) -> Result<i32> {
+        pub fn evict_dependency_index_segments(
+            &self,
+            handle: u32,
+            max_segments: i32,
+        ) -> Result<i32> {
             let guard = self
                 .dep_indexes
                 .lock()
                 .map_err(|_| Error::from_reason("dependency index lock poisoned".to_string()))?;
-            let snapshot = guard
-                .get(&handle)
-                .ok_or_else(|| Error::from_reason(format!("dependency index handle not found: {handle}")))?;
+            let snapshot = guard.get(&handle).ok_or_else(|| {
+                Error::from_reason(format!("dependency index handle not found: {handle}"))
+            })?;
 
             let evicted = evict_dependency_index_segments(snapshot, max_segments.max(0) as usize);
             Ok(evicted.min(i32::MAX as usize) as i32)

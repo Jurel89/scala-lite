@@ -187,7 +187,10 @@ fn build_normalized_simple_name_lookup(
         .collect::<HashMap<String, Vec<u16>>>()
 }
 
-fn ensure_segment_loaded(snapshot: &DependencySnapshot, segment_key: u16) -> Result<(), EngineError> {
+fn ensure_segment_loaded(
+    snapshot: &DependencySnapshot,
+    segment_key: u16,
+) -> Result<(), EngineError> {
     if snapshot.loaded_segments.borrow().contains_key(&segment_key) {
         touch_segment(snapshot, segment_key);
         return Ok(());
@@ -216,9 +219,12 @@ fn ensure_segment_loaded(snapshot: &DependencySnapshot, segment_key: u16) -> Res
     file.read_exact(&mut bytes)
         .map_err(|error| EngineError::Io(error.to_string()))?;
 
-    let segment: DepSegment =
-        bincode::deserialize(&bytes).map_err(|error| EngineError::Deserialization(error.to_string()))?;
-    snapshot.loaded_segments.borrow_mut().insert(segment_key, segment);
+    let segment: DepSegment = bincode::deserialize(&bytes)
+        .map_err(|error| EngineError::Deserialization(error.to_string()))?;
+    snapshot
+        .loaded_segments
+        .borrow_mut()
+        .insert(segment_key, segment);
     touch_segment(snapshot, segment_key);
     enforce_loaded_segment_limit(snapshot);
     Ok(())
@@ -261,7 +267,10 @@ pub fn set_dependency_index_max_loaded_segments(
     enforce_loaded_segment_limit(snapshot);
 }
 
-pub fn evict_dependency_index_segments(snapshot: &DependencySnapshot, max_segments: usize) -> usize {
+pub fn evict_dependency_index_segments(
+    snapshot: &DependencySnapshot,
+    max_segments: usize,
+) -> usize {
     let before = snapshot.loaded_segments.borrow().len();
     set_dependency_index_max_loaded_segments(snapshot, Some(max_segments));
     let after = snapshot.loaded_segments.borrow().len();
@@ -325,7 +334,11 @@ pub fn build_dependency_snapshot(
 
         let segment_key = segment_key_for_package(&symbol.package_name);
         let segment = segments.entry(segment_key).or_default();
-        segment.by_simple_name.entry(simple_name_id).or_default().push(entry);
+        segment
+            .by_simple_name
+            .entry(simple_name_id)
+            .or_default()
+            .push(entry);
         segment.by_fqcn.entry(fqcn_id).or_insert(entry);
 
         simple_name_lookup
@@ -413,8 +426,8 @@ pub fn save_dependency_index(path: &str, snapshot: &DependencySnapshot) -> Resul
         simple_name_lookup: snapshot.simple_name_lookup.clone(),
         fqcn_lookup: snapshot.fqcn_lookup.clone(),
     };
-    let header_bytes =
-        bincode::serialize(&header).map_err(|error| EngineError::Serialization(error.to_string()))?;
+    let header_bytes = bincode::serialize(&header)
+        .map_err(|error| EngineError::Serialization(error.to_string()))?;
 
     let mut lookup_entries = Vec::<SegmentLookupEntry>::new();
     for (key, blob, symbol_count) in &segment_blobs {
@@ -429,8 +442,8 @@ pub fn save_dependency_index(path: &str, snapshot: &DependencySnapshot) -> Resul
     let mut table = DependencyIndexTable {
         entries: lookup_entries,
     };
-    let provisional_table_bytes =
-        bincode::serialize(&table).map_err(|error| EngineError::Serialization(error.to_string()))?;
+    let provisional_table_bytes = bincode::serialize(&table)
+        .map_err(|error| EngineError::Serialization(error.to_string()))?;
 
     let mut segment_offset = DEPENDENCY_INDEX_MAGIC.len() as u64
         + 4
@@ -463,7 +476,8 @@ pub fn save_dependency_index(path: &str, snapshot: &DependencySnapshot) -> Resul
             .map_err(|error| EngineError::Io(error.to_string()))?;
     }
 
-    file.flush().map_err(|error| EngineError::Io(error.to_string()))?;
+    file.flush()
+        .map_err(|error| EngineError::Io(error.to_string()))?;
     Ok(())
 }
 
@@ -644,7 +658,10 @@ pub fn query_dep_symbols_in_package(
     }
 
     let mut all = query_dep_symbols(snapshot, name, limit.saturating_mul(4))?;
-    all.retain(|entry| entry.package_name == normalized_package && entry.simple_name.to_lowercase().contains(&normalized_name));
+    all.retain(|entry| {
+        entry.package_name == normalized_package
+            && entry.simple_name.to_lowercase().contains(&normalized_name)
+    });
     all.sort_by(|left, right| left.fqcn.cmp(&right.fqcn));
     all.truncate(limit as usize);
     Ok(all)
@@ -677,12 +694,24 @@ pub fn dependency_index_is_stale(
     let expected = snapshot
         .jar_manifests
         .iter()
-        .map(|manifest| (manifest.jar_path.clone(), manifest.hash, manifest.size_bytes))
+        .map(|manifest| {
+            (
+                manifest.jar_path.clone(),
+                manifest.hash,
+                manifest.size_bytes,
+            )
+        })
         .collect::<HashSet<(String, u64, u64)>>();
 
     let current = current_manifests
         .iter()
-        .map(|manifest| (manifest.jar_path.clone(), manifest.hash, manifest.size_bytes))
+        .map(|manifest| {
+            (
+                manifest.jar_path.clone(),
+                manifest.hash,
+                manifest.size_bytes,
+            )
+        })
         .collect::<HashSet<(String, u64, u64)>>();
 
     expected != current
@@ -695,7 +724,12 @@ pub fn changed_jar_paths(
     let previous = snapshot
         .jar_manifests
         .iter()
-        .map(|manifest| (manifest.jar_path.clone(), (manifest.hash, manifest.size_bytes)))
+        .map(|manifest| {
+            (
+                manifest.jar_path.clone(),
+                (manifest.hash, manifest.size_bytes),
+            )
+        })
         .collect::<HashMap<String, (u64, u64)>>();
 
     let mut changed = Vec::<String>::new();
@@ -920,14 +954,18 @@ mod tests {
                 .write(true)
                 .open(&path)
                 .expect("open should succeed");
-            file.seek(SeekFrom::Start(8 + 4)).expect("seek should succeed");
+            file.seek(SeekFrom::Start(8 + 4))
+                .expect("seek should succeed");
             file.write_all(&1u16.to_le_bytes())
                 .expect("write should succeed");
             file.flush().expect("flush should succeed");
         }
 
         let loaded = load_dependency_index(&path);
-        assert!(matches!(loaded, Err(EngineError::UnsupportedSchemaVersion(1))));
+        assert!(matches!(
+            loaded,
+            Err(EngineError::UnsupportedSchemaVersion(1))
+        ));
 
         let _ = fs::remove_file(path);
     }
@@ -953,8 +991,8 @@ mod tests {
             size_bytes: 100,
         }];
 
-        assert_eq!(dependency_index_is_stale(&built, &same), false);
-        assert_eq!(dependency_index_is_stale(&built, &changed), true);
+        assert!(!dependency_index_is_stale(&built, &same));
+        assert!(dependency_index_is_stale(&built, &changed));
 
         let changed_paths = changed_jar_paths(&built, &changed);
         assert_eq!(changed_paths, vec!["/deps/a.jar".to_string()]);

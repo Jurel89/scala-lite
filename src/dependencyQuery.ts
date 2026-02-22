@@ -130,9 +130,7 @@ export async function queryDependencySymbols(
   let nativeDependencyBytes = 0;
   try {
     nativeDependencyBytes = await getNativeEngine().getTotalDependencyMemoryUsageBytes();
-  } catch {
-    nativeDependencyBytes = 0;
-  }
+  } catch {}
 
   lastDependencyHotMemoryBytes = payloads
     .reduce((sum, payload) => sum + estimateClasspathPayloadBytes(payload), 0)

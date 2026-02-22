@@ -5,6 +5,7 @@ import { IndexedSymbol } from './symbolIndex';
 import { StructuredLogger } from './structuredLogger';
 import { compareSymbols } from './symbolSort';
 import { GoToDefinitionProvider, SharedDefinitionResolution } from './goToDefinitionFeature';
+import { hasDependencyIndexCache } from './scalaLiteCache';
 
 function kindLabel(kind: IndexedSymbol['symbolKind']): string {
   if (kind === 'package') {
@@ -40,6 +41,15 @@ function kindLabel(kind: IndexedSymbol['symbolKind']): string {
 
 function toRelativePath(filePath: string): string {
   return vscode.workspace.asRelativePath(filePath, false);
+}
+
+function resolveWorkspaceFolderForPath(filePath: string): vscode.WorkspaceFolder | undefined {
+  const uri = vscode.Uri.file(filePath);
+  return vscode.workspace.getWorkspaceFolder(uri) ?? vscode.workspace.workspaceFolders?.[0];
+}
+
+function resolveWorkspaceFolderForDocument(uri: vscode.Uri): vscode.WorkspaceFolder | undefined {
+  return vscode.workspace.getWorkspaceFolder(uri) ?? vscode.workspace.workspaceFolders?.[0];
 }
 
 function clampLine(line: number, maxLineCount: number): number {
@@ -100,7 +110,45 @@ function isDependencyCandidate(symbol: IndexedSymbol): boolean {
   return symbol.packageName === 'dependency' || symbol.filePath.endsWith('.jar');
 }
 
-function commandLink(command: string, arg: string): string {
+function isJdkCandidate(symbol: IndexedSymbol): boolean {
+  const filePath = symbol.filePath.toLowerCase();
+  const pkg = symbol.packageName.toLowerCase();
+  return filePath.includes('/jmods/')
+    || filePath.includes('\\jmods\\')
+    || filePath.endsWith('/lib/rt.jar')
+    || filePath.endsWith('\\lib\\rt.jar')
+    || pkg.startsWith('java.')
+    || pkg.startsWith('javax.')
+    || pkg.startsWith('jdk.');
+}
+
+function provenanceLabelForSymbol(symbol: IndexedSymbol): 'workspace' | 'dependency' | 'jdk' {
+  if (isJdkCandidate(symbol)) {
+    return 'jdk';
+  }
+
+  if (isDependencyCandidate(symbol)) {
+    return 'dependency';
+  }
+
+  return 'workspace';
+}
+
+function artifactNameFromPath(artifactPath: string): string {
+  const normalized = artifactPath.replace(/\\/g, '/');
+  return normalized.split('/').pop() ?? artifactPath;
+}
+
+function jarVersionHint(jarName: string): string | undefined {
+  const versionMatch = jarName.match(/-(\d+(?:\.\d+)*(?:[-.][A-Za-z0-9]+)*)\.jar$/);
+  return versionMatch?.[1];
+}
+
+function commandLink(command: string, arg?: string): string {
+  if (typeof arg !== 'string') {
+    return `command:${command}`;
+  }
+
   const encodedArgs = encodeURIComponent(JSON.stringify([arg]));
   return `command:${command}?${encodedArgs}`;
 }
@@ -242,7 +290,7 @@ export class HoverInfoProvider implements vscode.HoverProvider {
 
     if (resolved.kind === 'none') {
       this.logger.debug('SEARCH', `Hover: no symbol metadata found for '${symbolName}'. (${resolved.reason})`);
-      return this.buildLowConfidenceHover(symbolName, wordRange);
+      return this.buildLowConfidenceHover(symbolName, wordRange, document.uri);
     }
 
     if (resolved.kind === 'multiple') {
@@ -254,7 +302,7 @@ export class HoverInfoProvider implements vscode.HoverProvider {
     }
 
     if (resolved.confidence !== 'high') {
-      return this.buildLowConfidenceHover(symbolName, wordRange);
+      return this.buildLowConfidenceHover(symbolName, wordRange, document.uri);
     }
 
     return this.buildHighConfidenceHover(document, resolved, wordRange);
@@ -286,6 +334,32 @@ export class HoverInfoProvider implements vscode.HoverProvider {
     markdown.appendMarkdown(escapeMarkdown(`${toRelativePath(preferred.filePath)}:${preferred.lineNumber}`));
     markdown.appendMarkdown('  \n');
 
+    const provenance = provenanceLabelForSymbol(preferred);
+    const originLabel = provenance === 'jdk'
+      ? vscode.l10n.t('JDK')
+      : provenance === 'dependency'
+        ? vscode.l10n.t('Dependency')
+        : vscode.l10n.t('Workspace');
+    markdown.appendMarkdown(`**${vscode.l10n.t('Origin')}**: ${originLabel}`);
+
+    let dependencyArtifactPath: string | undefined;
+    if (provenance === 'dependency' || provenance === 'jdk') {
+      const workspaceFolder = resolveWorkspaceFolderForPath(preferred.filePath);
+      const attachment = workspaceFolder
+        ? await readDependencyAttachmentForPath(workspaceFolder, preferred.filePath)
+        : undefined;
+      dependencyArtifactPath = attachment?.jarPath ?? (preferred.filePath.endsWith('.jar') ? preferred.filePath : undefined);
+      if (dependencyArtifactPath) {
+        const jarName = artifactNameFromPath(dependencyArtifactPath);
+        const version = jarVersionHint(jarName);
+        markdown.appendMarkdown(` — ${escapeMarkdown(jarName)}`);
+        if (version) {
+          markdown.appendMarkdown(` (${vscode.l10n.t('version {0}', version)})`);
+        }
+      }
+    }
+    markdown.appendMarkdown('  \n');
+
     if (preferred.containerName) {
       markdown.appendMarkdown(`**${vscode.l10n.t('Container')}**: `);
       markdown.appendMarkdown(escapeMarkdown(preferred.containerName));
@@ -313,12 +387,24 @@ export class HoverInfoProvider implements vscode.HoverProvider {
       markdown.appendCodeblock(definitionPreview, 'scala');
     }
 
-    if (isDependencyCandidate(preferred)) {
-      const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+    if (isDependencyCandidate(preferred) || isJdkCandidate(preferred)) {
+      const workspaceFolder = resolveWorkspaceFolderForPath(preferred.filePath);
       if (workspaceFolder) {
         const attachment = await readDependencyAttachmentForPath(workspaceFolder, preferred.filePath);
+        const hasSources = typeof attachment?.sourcesPath === 'string';
+
+        markdown.isTrusted = true;
+        if (hasSources) {
+          markdown.appendMarkdown(`\n*${vscode.l10n.t('Sources available — Cmd+click to navigate.')}*\n`);
+        } else {
+          markdown.appendMarkdown(`\n*${vscode.l10n.t('No sources available —')} [${vscode.l10n.t('Fetch Sources')}](${commandLink('scalaLite.fetchDependencySources')})*\n`);
+          if (!signatureLine) {
+            markdown.appendMarkdown(`\n**${vscode.l10n.t('Signature')}**\n`);
+            markdown.appendCodeblock(`${kindLabel(preferred.symbolKind)} ${preferred.symbolName}`, 'scala');
+          }
+        }
+
         if (attachment) {
-          markdown.isTrusted = true;
           markdown.appendMarkdown(`\n**${vscode.l10n.t('Dependency Artifacts')}**\n`);
           if (attachment.sourcesPath) {
             markdown.appendMarkdown(`- [${vscode.l10n.t('Open sources jar')}](${commandLink('scalaLite.openDependencyAttachment', attachment.sourcesPath)})\n`);
@@ -343,15 +429,22 @@ export class HoverInfoProvider implements vscode.HoverProvider {
     markdown.appendMarkdown(escapeMarkdown(symbolName));
     markdown.appendMarkdown('\n\n');
     markdown.appendMarkdown(`${vscode.l10n.t('Dependency candidate found from classpath index.')}  \n`);
+    markdown.appendMarkdown(`**${vscode.l10n.t('Origin')}**: ${vscode.l10n.t('Dependency')}  \n`);
     markdown.appendMarkdown(`**${vscode.l10n.t('Defined at')}**: `);
     markdown.appendMarkdown(escapeMarkdown(`${toRelativePath(resolved.symbol.filePath)}:${resolved.symbol.lineNumber}`));
     markdown.appendMarkdown('  \n');
 
-    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+    const workspaceFolder = resolveWorkspaceFolderForPath(resolved.symbol.filePath);
     if (workspaceFolder) {
       const attachment = await readDependencyAttachmentForPath(workspaceFolder, resolved.symbol.filePath);
+      markdown.isTrusted = true;
+      if (attachment?.sourcesPath) {
+        markdown.appendMarkdown(`\n*${vscode.l10n.t('Sources available — Cmd+click to navigate.')}*\n`);
+      } else {
+        markdown.appendMarkdown(`\n*${vscode.l10n.t('No sources available —')} [${vscode.l10n.t('Fetch Sources')}](${commandLink('scalaLite.fetchDependencySources')})*\n`);
+      }
+
       if (attachment?.sourcesPath || attachment?.javadocPath) {
-        markdown.isTrusted = true;
         markdown.appendMarkdown(`\n**${vscode.l10n.t('Dependency Artifacts')}**\n`);
         if (attachment.sourcesPath) {
           markdown.appendMarkdown(`- [${vscode.l10n.t('Open sources jar')}](${commandLink('scalaLite.openDependencyAttachment', attachment.sourcesPath)})\n`);
@@ -414,12 +507,21 @@ export class HoverInfoProvider implements vscode.HoverProvider {
     return new vscode.Hover(markdown, wordRange);
   }
 
-  private buildLowConfidenceHover(
+  private async buildLowConfidenceHover(
     symbolName: string,
-    wordRange: vscode.Range
-  ): vscode.Hover {
+    wordRange: vscode.Range,
+    documentUri: vscode.Uri
+  ): Promise<vscode.Hover> {
     const markdown = new vscode.MarkdownString(undefined, true);
     markdown.appendMarkdown(`### ${symbolName}\n\n`);
+
+    const workspaceFolder = resolveWorkspaceFolderForDocument(documentUri);
+    if (workspaceFolder && !(await hasDependencyIndexCache(workspaceFolder))) {
+      markdown.isTrusted = true;
+      markdown.appendMarkdown(`${vscode.l10n.t('Classpath not synced —')} [${vscode.l10n.t('Sync Classpath')}](${commandLink('scalaLite.syncClasspath')})`);
+      return new vscode.Hover(markdown, wordRange);
+    }
+
     markdown.appendMarkdown(vscode.l10n.t('Not enough context to show a reliable hover. Press F12.'));
     return new vscode.Hover(markdown, wordRange);
   }

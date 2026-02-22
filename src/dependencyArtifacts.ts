@@ -1,11 +1,16 @@
 import * as fs from 'node:fs/promises';
+import * as crypto from 'node:crypto';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { executeBuildCommand } from './buildCommandExecutor';
 import { ensureScalaLiteCacheDir, getScalaLiteCacheUri } from './scalaLiteCache';
+import { formatStructuredLogEntry } from './structuredLogCore';
 import { EffectiveBuildConfig } from './workspaceConfig';
 
 const ATTACHMENTS_FILE = 'dependency-attachments.json';
+const SOURCES_CACHE_DIR = 'sources-cache';
+const SOURCES_CACHE_INDEX_FILE = 'sources-cache-index.json';
+const DEFAULT_MAX_SOURCES_CACHE_BYTES = 512 * 1024 * 1024;
 
 interface CachedClasspathPayload {
   readonly jars?: readonly string[];
@@ -32,6 +37,19 @@ export interface FetchDependencyArtifactsOptions {
   readonly onOutput?: (line: string) => void;
 }
 
+interface SourcesCacheIndexEntry {
+  readonly relativePath: string;
+  readonly sizeBytes: number;
+  readonly lastAccessedAt: string;
+}
+
+interface SourcesCacheIndex {
+  readonly version: 1;
+  readonly generatedAt: string;
+  readonly maxBytes: number;
+  readonly entries: readonly SourcesCacheIndexEntry[];
+}
+
 async function fileExists(filePath: string): Promise<boolean> {
   try {
     await fs.access(filePath);
@@ -39,6 +57,248 @@ async function fileExists(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+function toSourcesCacheFileName(sourcePath: string): string {
+  const ext = path.extname(sourcePath) || '.jar';
+  const baseName = path.basename(sourcePath, ext)
+    .replace(/[^a-zA-Z0-9._-]/g, '-')
+    .slice(0, 80);
+  const digest = crypto.createHash('sha1').update(sourcePath).digest('hex').slice(0, 12);
+  return `${baseName.length > 0 ? baseName : 'artifact'}-${digest}${ext}`;
+}
+
+async function readSourcesCacheIndex(workspaceFolder: vscode.WorkspaceFolder): Promise<SourcesCacheIndex> {
+  const cacheRoot = getScalaLiteCacheUri(workspaceFolder);
+  if (!cacheRoot) {
+    return {
+      version: 1,
+      generatedAt: new Date().toISOString(),
+      maxBytes: DEFAULT_MAX_SOURCES_CACHE_BYTES,
+      entries: []
+    };
+  }
+
+  const indexUri = vscode.Uri.joinPath(cacheRoot, SOURCES_CACHE_INDEX_FILE);
+  try {
+    const raw = await vscode.workspace.fs.readFile(indexUri);
+    const parsed = JSON.parse(Buffer.from(raw).toString('utf8')) as Partial<SourcesCacheIndex>;
+    const entries = Array.isArray(parsed.entries)
+      ? parsed.entries.filter((entry): entry is SourcesCacheIndexEntry => {
+        if (!entry || typeof entry !== 'object') {
+          return false;
+        }
+
+        const typed = entry as Partial<SourcesCacheIndexEntry>;
+        return typeof typed.relativePath === 'string'
+          && typed.relativePath.length > 0
+          && typeof typed.sizeBytes === 'number'
+          && Number.isFinite(typed.sizeBytes)
+          && typed.sizeBytes >= 0
+          && typeof typed.lastAccessedAt === 'string'
+          && typed.lastAccessedAt.length > 0;
+      })
+      : [];
+
+    return {
+      version: 1,
+      generatedAt: typeof parsed.generatedAt === 'string' ? parsed.generatedAt : new Date().toISOString(),
+      maxBytes: DEFAULT_MAX_SOURCES_CACHE_BYTES,
+      entries
+    };
+  } catch {
+    return {
+      version: 1,
+      generatedAt: new Date().toISOString(),
+      maxBytes: DEFAULT_MAX_SOURCES_CACHE_BYTES,
+      entries: []
+    };
+  }
+}
+
+async function writeSourcesCacheIndex(
+  workspaceFolder: vscode.WorkspaceFolder,
+  entries: readonly SourcesCacheIndexEntry[]
+): Promise<void> {
+  const cacheRoot = getScalaLiteCacheUri(workspaceFolder);
+  if (!cacheRoot) {
+    return;
+  }
+
+  const indexUri = vscode.Uri.joinPath(cacheRoot, SOURCES_CACHE_INDEX_FILE);
+  const payload: SourcesCacheIndex = {
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    maxBytes: DEFAULT_MAX_SOURCES_CACHE_BYTES,
+    entries
+  };
+
+  await vscode.workspace.fs.writeFile(indexUri, Buffer.from(`${JSON.stringify(payload, null, 2)}\n`, 'utf8'));
+}
+
+async function ensureSourcesCacheDir(workspaceFolder: vscode.WorkspaceFolder): Promise<vscode.Uri | undefined> {
+  const cacheRoot = await ensureScalaLiteCacheDir(workspaceFolder);
+  if (!cacheRoot) {
+    return undefined;
+  }
+
+  const sourcesCacheUri = vscode.Uri.joinPath(cacheRoot, SOURCES_CACHE_DIR);
+  await vscode.workspace.fs.createDirectory(sourcesCacheUri);
+  return sourcesCacheUri;
+}
+
+async function upsertSourcesCacheEntry(
+  workspaceFolder: vscode.WorkspaceFolder,
+  entry: SourcesCacheIndexEntry
+): Promise<void> {
+  const current = await readSourcesCacheIndex(workspaceFolder);
+  const nextEntries = [
+    ...current.entries.filter((existing) => existing.relativePath !== entry.relativePath),
+    entry
+  ];
+  await writeSourcesCacheIndex(workspaceFolder, nextEntries);
+}
+
+function toEpochMillis(value: string): number {
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+async function enforceSourcesCacheLru(workspaceFolder: vscode.WorkspaceFolder): Promise<void> {
+  const cacheRoot = getScalaLiteCacheUri(workspaceFolder);
+  if (!cacheRoot) {
+    return;
+  }
+
+  const index = await readSourcesCacheIndex(workspaceFolder);
+  const normalizedEntries: SourcesCacheIndexEntry[] = [];
+  let totalBytes = 0;
+
+  for (const entry of index.entries) {
+    const targetUri = vscode.Uri.joinPath(cacheRoot, SOURCES_CACHE_DIR, entry.relativePath);
+    try {
+      const stat = await vscode.workspace.fs.stat(targetUri);
+      const normalized: SourcesCacheIndexEntry = {
+        relativePath: entry.relativePath,
+        sizeBytes: stat.size,
+        lastAccessedAt: entry.lastAccessedAt
+      };
+      normalizedEntries.push(normalized);
+      totalBytes += stat.size;
+    } catch {
+      continue;
+    }
+  }
+
+  if (totalBytes <= DEFAULT_MAX_SOURCES_CACHE_BYTES) {
+    await writeSourcesCacheIndex(workspaceFolder, normalizedEntries);
+    return;
+  }
+
+  const evicted: SourcesCacheIndexEntry[] = [];
+  const ordered = [...normalizedEntries].sort((left, right) => toEpochMillis(left.lastAccessedAt) - toEpochMillis(right.lastAccessedAt));
+  const kept = [...normalizedEntries];
+  let runningBytes = totalBytes;
+
+  for (const entry of ordered) {
+    if (runningBytes <= DEFAULT_MAX_SOURCES_CACHE_BYTES) {
+      break;
+    }
+
+    const targetUri = vscode.Uri.joinPath(cacheRoot, SOURCES_CACHE_DIR, entry.relativePath);
+    try {
+      await vscode.workspace.fs.delete(targetUri, { recursive: false, useTrash: false });
+      runningBytes = Math.max(0, runningBytes - entry.sizeBytes);
+      evicted.push(entry);
+      const indexToRemove = kept.findIndex((candidate) => candidate.relativePath === entry.relativePath);
+      if (indexToRemove >= 0) {
+        kept.splice(indexToRemove, 1);
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  await writeSourcesCacheIndex(workspaceFolder, kept);
+
+  if (evicted.length > 0) {
+    const reclaimed = evicted.reduce((sum, entry) => sum + entry.sizeBytes, 0);
+    const logLine = formatStructuredLogEntry({
+      timestamp: new Date(),
+      level: 'WARN',
+      category: 'CONFIG',
+      message: `sources-cache LRU evicted ${evicted.length} item(s), reclaimed ${reclaimed} bytes, cap ${DEFAULT_MAX_SOURCES_CACHE_BYTES} bytes`
+    });
+    console.warn(logLine);
+  }
+}
+
+async function cacheAttachmentArtifact(
+  workspaceFolder: vscode.WorkspaceFolder,
+  sourcePath: string | undefined
+): Promise<string | undefined> {
+  if (typeof sourcePath !== 'string' || sourcePath.length === 0) {
+    return undefined;
+  }
+
+  const sourcesCacheUri = await ensureSourcesCacheDir(workspaceFolder);
+  if (!sourcesCacheUri) {
+    return sourcePath;
+  }
+
+  const fileName = toSourcesCacheFileName(sourcePath);
+  const destinationUri = vscode.Uri.joinPath(sourcesCacheUri, fileName);
+  const destinationPath = destinationUri.fsPath;
+
+  try {
+    if (!(await fileExists(destinationPath))) {
+      await fs.copyFile(sourcePath, destinationPath);
+    }
+
+    const stat = await fs.stat(destinationPath);
+    await upsertSourcesCacheEntry(workspaceFolder, {
+      relativePath: fileName,
+      sizeBytes: stat.size,
+      lastAccessedAt: new Date().toISOString()
+    });
+
+    await enforceSourcesCacheLru(workspaceFolder);
+    return destinationPath;
+  } catch {
+    return sourcePath;
+  }
+}
+
+async function touchSourcesCacheEntry(
+  workspaceFolder: vscode.WorkspaceFolder,
+  artifactPath: string | undefined
+): Promise<void> {
+  if (typeof artifactPath !== 'string' || artifactPath.length === 0) {
+    return;
+  }
+
+  const cacheRoot = getScalaLiteCacheUri(workspaceFolder);
+  if (!cacheRoot) {
+    return;
+  }
+
+  const relativeToCache = path.relative(path.join(cacheRoot.fsPath, SOURCES_CACHE_DIR), artifactPath);
+  if (relativeToCache.startsWith('..') || path.isAbsolute(relativeToCache)) {
+    return;
+  }
+
+  let stat: Awaited<ReturnType<typeof fs.stat>>;
+  try {
+    stat = await fs.stat(artifactPath);
+  } catch {
+    return;
+  }
+
+  await upsertSourcesCacheEntry(workspaceFolder, {
+    relativePath: relativeToCache,
+    sizeBytes: stat.size,
+    lastAccessedAt: new Date().toISOString()
+  });
 }
 
 async function readClasspathJars(workspaceFolder: vscode.WorkspaceFolder): Promise<readonly string[]> {
@@ -207,14 +467,22 @@ export async function fetchDependencyArtifacts(options: FetchDependencyArtifacts
       fileExists(javadocPathCandidate)
     ]);
 
+    const cachedSourcesPath = hasSources
+      ? await cacheAttachmentArtifact(options.workspaceFolder, sourcesPathCandidate)
+      : undefined;
+    const cachedJavadocPath = hasJavadoc
+      ? await cacheAttachmentArtifact(options.workspaceFolder, javadocPathCandidate)
+      : undefined;
+
     return {
       jarPath,
-      sourcesPath: hasSources ? sourcesPathCandidate : undefined,
-      javadocPath: hasJavadoc ? javadocPathCandidate : undefined
+      sourcesPath: hasSources ? cachedSourcesPath : undefined,
+      javadocPath: hasJavadoc ? cachedJavadocPath : undefined
     };
   }));
 
   await writeAttachments(options.workspaceFolder, attachments);
+  await enforceSourcesCacheLru(options.workspaceFolder);
 
   return {
     totalJars: jars.length,
@@ -243,6 +511,11 @@ export async function readDependencyAttachmentsByJar(
       if (!entry || typeof entry.jarPath !== 'string' || entry.jarPath.length === 0) {
         continue;
       }
+
+      await Promise.all([
+        touchSourcesCacheEntry(workspaceFolder, entry.sourcesPath),
+        touchSourcesCacheEntry(workspaceFolder, entry.javadocPath)
+      ]);
 
       map.set(entry.jarPath, entry);
     }

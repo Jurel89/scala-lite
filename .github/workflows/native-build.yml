@@ -40,6 +40,10 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/scala-lite-engine
+
       - name: Install Node dependencies
         run: npm ci
 
@@ -68,3 +72,11 @@ jobs:
           name: native-${{ matrix.target }}
           path: native/scala-lite-engine/bindings/scala-lite-engine.${{ matrix.suffix }}.node
           if-no-files-found: error
+
+      - name: Upload native test fixtures (if present)
+        if: hashFiles('native/scala-lite-engine/test-fixtures/**') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-test-fixtures-${{ matrix.target }}
+          path: native/scala-lite-engine/test-fixtures
+          if-no-files-found: ignore

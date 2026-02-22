@@ -14,6 +14,36 @@ interface RankedSymbol {
   readonly recencyScore: number;
 }
 
+function isDependencySymbol(symbol: IndexedSymbol): boolean {
+  const filePath = symbol.filePath.toLowerCase();
+  return symbol.packageName === 'dependency'
+    || filePath.endsWith('.jar')
+    || filePath.endsWith('.jmod');
+}
+
+function dependencyArtifactHint(symbol: IndexedSymbol): string {
+  const normalizedPath = symbol.filePath.replace(/\\/g, '/');
+  const fileName = normalizedPath.split('/').pop();
+  if (!fileName) {
+    return 'dependency';
+  }
+
+  return fileName;
+}
+
+function dependencySpecificity(symbol: IndexedSymbol): number {
+  const packageSegments = symbol.packageName
+    .split('.')
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0).length;
+  return packageSegments;
+}
+
+function dependencyScalaBoost(symbol: IndexedSymbol): number {
+  const filePath = symbol.filePath.toLowerCase();
+  return filePath.includes('scala') ? 1 : 0;
+}
+
 function toSymbolKind(kind: IndexedSymbol['symbolKind']): vscode.SymbolKind {
   if (kind === 'package') {
     return vscode.SymbolKind.Package;
@@ -111,16 +141,17 @@ export class WorkspaceSymbolSearchProvider implements vscode.WorkspaceSymbolProv
     const indexedSymbols = normalizedQuery.length === 0
       ? this.symbolIndexManager.getAllSymbols()
       : await this.symbolIndexManager.searchSymbols(normalizedQuery, 300, token);
-    let allSymbols: readonly IndexedSymbol[] = indexedSymbols;
+    const workspaceSymbols = indexedSymbols.filter((symbol) => !isDependencySymbol(symbol));
+    let dependencySymbols: readonly IndexedSymbol[] = [];
     if (mode === 'C' && normalizedQuery.length > 0) {
       const dependencyConfig = await readDependencyConfigFromWorkspaceConfig();
       const folder = vscode.workspace.workspaceFolders?.[0];
       if (dependencyConfig.enabled && dependencyConfig.includeInWorkspaceSymbol && folder) {
-        const dependencySymbols = await queryDependencySymbols(folder, normalizedQuery, 100);
-        allSymbols = [...indexedSymbols, ...dependencySymbols];
+        dependencySymbols = await queryDependencySymbols(folder, normalizedQuery, 100);
       }
     }
-    const ranked: RankedSymbol[] = [];
+    const rankedWorkspace: RankedSymbol[] = [];
+    const rankedDependency: RankedSymbol[] = [];
     let indexedModuleRoot: string | undefined;
 
     if (mode === 'C') {
@@ -135,7 +166,7 @@ export class WorkspaceSymbolSearchProvider implements vscode.WorkspaceSymbolProv
       }
     }
 
-    for (const symbol of allSymbols) {
+    for (const symbol of workspaceSymbols) {
       if (token.isCancellationRequested) {
         return [];
       }
@@ -146,7 +177,7 @@ export class WorkspaceSymbolSearchProvider implements vscode.WorkspaceSymbolProv
         continue;
       }
 
-      ranked.push({
+      rankedWorkspace.push({
         symbol,
         prefixRank: normalizedName.startsWith(normalizedQuery) ? 0 : 1,
         fuzzyScore: score,
@@ -154,7 +185,28 @@ export class WorkspaceSymbolSearchProvider implements vscode.WorkspaceSymbolProv
       });
     }
 
-    ranked.sort((left, right) => {
+    for (const symbol of dependencySymbols) {
+      if (token.isCancellationRequested) {
+        return [];
+      }
+
+      const normalizedName = symbol.symbolName.toLowerCase();
+      const score = subsequenceScore(normalizedQuery, normalizedName);
+      if (score === undefined) {
+        continue;
+      }
+
+      const specificityPenalty = dependencySpecificity(symbol);
+      const scalaBoost = dependencyScalaBoost(symbol) * 10;
+      rankedDependency.push({
+        symbol,
+        prefixRank: normalizedName.startsWith(normalizedQuery) ? 0 : 1,
+        fuzzyScore: score + scalaBoost - specificityPenalty,
+        recencyScore: 0
+      });
+    }
+
+    const rankComparator = (left: RankedSymbol, right: RankedSymbol): number => {
       if (left.prefixRank !== right.prefixRank) {
         return left.prefixRank - right.prefixRank;
       }
@@ -168,14 +220,24 @@ export class WorkspaceSymbolSearchProvider implements vscode.WorkspaceSymbolProv
       }
 
       return compareSymbols(left.symbol, right.symbol);
-    });
+    };
 
-    return ranked.slice(0, 200).map((entry) => {
+    rankedWorkspace.sort(rankComparator);
+    rankedDependency.sort(rankComparator);
+
+    const merged = [...rankedWorkspace.slice(0, 200), ...rankedDependency.slice(0, 100)].slice(0, 300);
+
+    return merged.map((entry) => {
       const symbol = entry.symbol;
-      const modulePrefix = mode === 'C' ? this.resolveModulePrefix(symbol.filePath) : undefined;
-      const source = this.resolveSymbolSource(mode, symbol.filePath, indexedModuleRoot);
-      const badge = formatResultBadge(source);
-      const symbolLabel = modulePrefix ? `${badge} ${modulePrefix}: ${symbol.symbolName}` : `${badge} ${symbol.symbolName}`;
+      const isDependency = isDependencySymbol(symbol);
+      const symbolLabel = isDependency
+        ? `[dep] ${symbol.symbolName} — ${dependencyArtifactHint(symbol)}`
+        : (() => {
+          const modulePrefix = mode === 'C' ? this.resolveModulePrefix(symbol.filePath) : undefined;
+          const source = this.resolveSymbolSource(mode, symbol.filePath, indexedModuleRoot);
+          const badge = formatResultBadge(source);
+          return modulePrefix ? `${badge} ${modulePrefix}: ${symbol.symbolName}` : `${badge} ${symbol.symbolName}`;
+        })();
       return new vscode.SymbolInformation(
         symbolLabel,
         toSymbolKind(symbol.symbolKind),

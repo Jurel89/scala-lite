@@ -17,13 +17,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Ensure test fixtures are present when defined
+        run: |
+          if [ -d native/scala-lite-engine/test-fixtures ]; then
+            find native/scala-lite-engine/test-fixtures -type f | head -n 20
+          else
+            echo "No native test fixtures directory present; continuing."
+          fi
       
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/scala-lite-engine
       
       - run: cargo fmt --manifest-path native/scala-lite-engine/Cargo.toml --all -- --check
+
+      - run: cargo build --manifest-path native/scala-lite-engine/Cargo.toml --locked --all-targets
       
       - run: cargo clippy --manifest-path native/scala-lite-engine/Cargo.toml --all-targets -- -D warnings
       
-      - run: cargo test --manifest-path native/scala-lite-engine/Cargo.toml --all
+      - run: cargo test --manifest-path native/scala-lite-engine/Cargo.toml --locked --all-targets
+
+      - run: cargo test --manifest-path native/scala-lite-engine/Cargo.toml --locked --features napi --lib

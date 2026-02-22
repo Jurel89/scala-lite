@@ -175,6 +175,31 @@
         "command": "scalaLite.memoryReport",
         "title": "%command.scalaLite.memoryReport.title%",
         "category": "%commandCategory.scalaLite%"
+      },
+      {
+        "command": "scalaLite.syncClasspath",
+        "title": "%command.scalaLite.syncClasspath.title%",
+        "category": "%commandCategory.scalaLite%"
+      },
+      {
+        "command": "scalaLite.fetchDependencySources",
+        "title": "%command.scalaLite.fetchDependencySources.title%",
+        "category": "%commandCategory.scalaLite%"
+      },
+      {
+        "command": "scalaLite.dependencyStatus",
+        "title": "%command.scalaLite.dependencyStatus.title%",
+        "category": "%commandCategory.scalaLite%"
+      },
+      {
+        "command": "scalaLite.dependencyJdkStatus",
+        "title": "%command.scalaLite.dependencyJdkStatus.title%",
+        "category": "%commandCategory.scalaLite%"
+      },
+      {
+        "command": "scalaLite.resetDependencyCache",
+        "title": "%command.scalaLite.resetDependencyCache.title%",
+        "category": "%commandCategory.scalaLite%"
       }
     ],
     "configuration": {
@@ -241,6 +266,104 @@
           "minimum": 0,
           "maximum": 5,
           "description": "%configuration.scalaLite.hover.previewLines.description%"
+        },
+        "scalaLite.deps.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "%configuration.scalaLite.deps.enabled.description%"
+        },
+        "scalaLite.deps.includeInWorkspaceSymbol": {
+          "type": "boolean",
+          "default": false,
+          "description": "%configuration.scalaLite.deps.includeInWorkspaceSymbol.description%"
+        },
+        "scalaLite.deps.indexTestScope": {
+          "type": "boolean",
+          "default": false,
+          "description": "%configuration.scalaLite.deps.indexTestScope.description%"
+        },
+        "scalaLite.deps.indexCaps.maxJars": {
+          "type": "integer",
+          "default": 500,
+          "minimum": 1,
+          "maximum": 2000,
+          "description": "%configuration.scalaLite.deps.indexCaps.maxJars.description%"
+        },
+        "scalaLite.deps.indexCaps.maxIndexTimeSeconds": {
+          "type": "integer",
+          "default": 120,
+          "minimum": 10,
+          "maximum": 600,
+          "description": "%configuration.scalaLite.deps.indexCaps.maxIndexTimeSeconds.description%"
+        },
+        "scalaLite.deps.cache.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "%configuration.scalaLite.deps.cache.enabled.description%"
+        },
+        "scalaLite.deps.jdkModules": {
+          "type": "array",
+          "default": [
+            "java.base"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "%configuration.scalaLite.deps.jdkModules.description%"
+        },
+        "scalaLite.build.classpathProvider": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "maven",
+            "sbt"
+          ],
+          "default": "auto",
+          "description": "%configuration.scalaLite.build.classpathProvider.description%"
+        },
+        "scalaLite.build.jdkHome": {
+          "type": "string",
+          "default": "",
+          "description": "%configuration.scalaLite.build.jdkHome.description%"
+        },
+        "scalaLite.build.maven.profiles": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "%configuration.scalaLite.build.maven.profiles.description%"
+        },
+        "scalaLite.build.maven.args": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "%configuration.scalaLite.build.maven.args.description%"
+        },
+        "scalaLite.build.maven.wrapperPath": {
+          "type": "string",
+          "default": "",
+          "description": "%configuration.scalaLite.build.maven.wrapperPath.description%"
+        },
+        "scalaLite.build.sbt.args": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "%configuration.scalaLite.build.sbt.args.description%"
+        },
+        "scalaLite.build.sbt.strategy": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "coursier",
+            "sbt-show"
+          ],
+          "default": "sbt-show",
+          "description": "%configuration.scalaLite.build.sbt.strategy.description%"
         }
       }
     },
@@ -304,6 +427,7 @@
     "test:smoke": "node dist/test/smoke.vscode-test.js"
   },
   "dependencies": {
+    "fast-xml-parser": "^4.5.3",
     "jszip": "^3.10.1",
     "minimatch": "^10.2.2"
   },

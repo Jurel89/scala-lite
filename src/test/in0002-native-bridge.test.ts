@@ -74,5 +74,7 @@ test('IN-0002: hover provider is wired for non-Mode-A states', () => {
   assert.equal(modeSource.includes('readonly hoverProvider?: vscode.HoverProvider;'), true);
   assert.equal(hoverSource.includes('readDefinitionPreview'), true);
   assert.equal(hoverSource.includes("appendCodeblock(definitionPreview, 'scala')"), true);
-  assert.equal(hoverSource.includes("vscode.l10n.t('Definition')"), true);
+    assert.equal(hoverSource.includes('readDependencyAttachmentForPath'), true);
+    assert.equal(hoverSource.includes('scalaLite.openDependencyAttachment'), true);
+    assert.equal(hoverSource.includes("vscode.l10n.t('Definition')"), true);
 });

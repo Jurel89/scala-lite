@@ -10,6 +10,15 @@ export interface BuildToolDetectionResult {
   readonly buildTool: BuildTool;
 }
 
+export type ClasspathProvider = 'maven' | 'sbt' | 'none';
+
+export interface ClasspathProviderDetectionResult {
+  readonly provider: ClasspathProvider;
+  readonly hasMavenWrapper: boolean;
+  readonly hasSbtWrapper: boolean;
+  readonly bothDetected: boolean;
+}
+
 
 async function readTextFiles(workspace: typeof vscode.workspace, uris: readonly vscode.Uri[]): Promise<string[]> {
   const contents = await Promise.all(
@@ -132,4 +141,67 @@ export class BuildToolDetectionSession {
 
     return detected;
   }
+}
+
+export interface ClasspathProviderChoiceOptions {
+  readonly preferred?: 'maven' | 'sbt' | 'auto';
+  readonly promptUser?: (options: readonly ClasspathProvider[]) => Promise<ClasspathProvider | undefined>;
+}
+
+export function chooseClasspathProvider(
+  hasMavenProject: boolean,
+  hasSbtProject: boolean,
+  options?: ClasspathProviderChoiceOptions
+): Promise<ClasspathProvider> {
+  const preferred = options?.preferred ?? 'auto';
+  if (hasMavenProject && hasSbtProject) {
+    if (preferred === 'maven' || preferred === 'sbt') {
+      return Promise.resolve(preferred);
+    }
+
+    if (options?.promptUser) {
+      return options.promptUser(['sbt', 'maven']).then((picked) => picked ?? 'sbt');
+    }
+
+    return Promise.resolve('sbt');
+  }
+
+  if (hasSbtProject) {
+    return Promise.resolve('sbt');
+  }
+
+  if (hasMavenProject) {
+    return Promise.resolve('maven');
+  }
+
+  return Promise.resolve('none');
+}
+
+export async function detectClasspathProvider(
+  folder: vscode.WorkspaceFolder,
+  options?: ClasspathProviderChoiceOptions,
+  workspace: typeof vscode.workspace = vscode.workspace
+): Promise<ClasspathProviderDetectionResult> {
+  const [hasSbtBuild, hasMavenPom, hasSbtWrapper, hasMavenWrapperUnix, hasMavenWrapperCmd] = await Promise.all([
+    findExists(workspace, folder, 'build.sbt'),
+    findExists(workspace, folder, 'pom.xml'),
+    findExists(workspace, folder, 'sbt'),
+    findExists(workspace, folder, 'mvnw'),
+    findExists(workspace, folder, 'mvnw.cmd')
+  ]);
+
+  const hasMavenWrapper = hasMavenWrapperUnix || hasMavenWrapperCmd;
+
+  const provider = await chooseClasspathProvider(
+    hasMavenPom,
+    hasSbtBuild,
+    options
+  );
+
+  return {
+    provider,
+    hasMavenWrapper,
+    hasSbtWrapper,
+    bothDetected: hasMavenPom && hasSbtBuild
+  };
 }

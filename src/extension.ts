@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 import {
   BuildToolDetectionResult,
-  BuildToolDetectionSession
+  BuildToolDetectionSession,
+  detectClasspathProvider
 } from './buildToolDetector';
 import { BuildTool } from './buildToolInference';
 import { runIdleCpuAudit } from './idleCpuAudit';
@@ -9,8 +10,11 @@ import { ModeManager } from './modeManager';
 import { WorkspaceMode } from './modePresentation';
 import {
   openOrCreateWorkspaceConfig,
+  readBuildConfigFromWorkspaceConfig,
+  readDependencyConfigFromWorkspaceConfig,
   readLogLevelFromWorkspaceConfig,
-  getWorkspaceConfigSourceLabel
+  getWorkspaceConfigSourceLabel,
+  writeClasspathProviderToWorkspaceConfig
 } from './workspaceConfig';
 import {
   registerRunMainCommandsWithExecutor,
@@ -47,6 +51,23 @@ import { WorkspaceSymbolSearchProvider } from './workspaceSymbolFeature';
 import { FindUsagesProvider } from './findUsagesFeature';
 import { SyntaxDiagnosticsController } from './syntaxDiagnosticsFeature';
 import { HoverInfoProvider } from './hoverInfoFeature';
+import { ensureScalaLiteCacheDir, getScalaLiteCacheSummary, resetScalaLiteCache } from './scalaLiteCache';
+import { fetchDependencyArtifacts, readDependencyAttachmentSummary } from './dependencyArtifacts';
+import { resolveJdkModules } from './jdkResolver';
+import {
+  prepareClasspathSync,
+  readDependencySyncStatus,
+  syncMavenClasspathWithJdk,
+  syncSbtClasspathWithJdk,
+  writeDependencySyncFailure
+} from './dependencySyncOrchestrator';
+
+const COMMAND_SYNC_CLASSPATH = 'scalaLite.syncClasspath';
+const COMMAND_FETCH_DEPENDENCY_SOURCES = 'scalaLite.fetchDependencySources';
+const COMMAND_DEPENDENCY_STATUS = 'scalaLite.dependencyStatus';
+const COMMAND_DEPENDENCY_JDK_STATUS = 'scalaLite.dependencyJdkStatus';
+const COMMAND_RESET_DEPENDENCY_CACHE = 'scalaLite.resetDependencyCache';
+const COMMAND_OPEN_DEPENDENCY_ATTACHMENT = 'scalaLite.openDependencyAttachment';
 
 const IDLE_AUDIT_DURATION_MS = 30_000;
 const MODE_C_BUDGET_AUDIT_INTERVAL_MS = 60_000;
@@ -333,6 +354,319 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.showInformationMessage(vscode.l10n.t('Build tool re-detection completed.'));
   });
 
+  const syncClasspathDisposable = vscode.commands.registerCommand(COMMAND_SYNC_CLASSPATH, async () => {
+    if (activeMode !== 'C') {
+      vscode.window.showWarningMessage(vscode.l10n.t('Switch to Mode C to enable dependency indexing.'));
+      return;
+    }
+
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    if (!folder) {
+      vscode.window.showWarningMessage(vscode.l10n.t('Open a workspace folder before syncing classpath.'));
+      return;
+    }
+
+    const buildConfig = await readBuildConfigFromWorkspaceConfig();
+    const dependencyConfig = await readDependencyConfigFromWorkspaceConfig();
+
+    if (!dependencyConfig.enabled) {
+      vscode.window.showInformationMessage(vscode.l10n.t('Dependency indexing is disabled in workspace configuration.'));
+      return;
+    }
+
+    let selectedProvider: 'maven' | 'sbt' | undefined;
+    const prepared = await prepareClasspathSync(
+      folder,
+      buildConfig,
+      async (providers) => {
+        const picked = await vscode.window.showQuickPick(
+          providers.map((provider) => ({
+            label: provider === 'sbt' ? 'SBT' : 'Maven',
+            provider
+          })),
+          {
+            title: vscode.l10n.t('Both SBT and Maven detected. Choose classpath provider.'),
+            ignoreFocusOut: true
+          }
+        );
+        if (picked?.provider === 'maven' || picked?.provider === 'sbt') {
+          selectedProvider = picked.provider;
+          await writeClasspathProviderToWorkspaceConfig(picked.provider);
+        }
+
+        return picked?.provider;
+      }
+    );
+
+    if (prepared.provider === 'none') {
+      vscode.window.showWarningMessage(vscode.l10n.t('No Maven or SBT project detected in the workspace root.'));
+      return;
+    }
+
+    const selectedModule = prepared.provider === 'maven'
+      ? (prepared.modules.length === 1
+        ? prepared.modules[0]
+        : await vscode.window.showQuickPick(
+          prepared.modules.map((module) => ({
+            label: module.artifactId,
+            description: module.path,
+            detail: module.packaging,
+            module
+          })),
+          {
+            title: vscode.l10n.t('Select Maven module for classpath sync'),
+            ignoreFocusOut: true
+          }
+        ).then((picked) => picked?.module))
+      : undefined;
+
+    if (prepared.provider === 'maven' && prepared.modules.length === 0) {
+      vscode.window.showWarningMessage(vscode.l10n.t('No Maven modules found. Ensure pom.xml exists at workspace root.'));
+      return;
+    }
+
+    if (prepared.provider === 'maven' && !selectedModule) {
+      return;
+    }
+
+    await ensureScalaLiteCacheDir(folder);
+    const startedAt = Date.now();
+
+    try {
+      const status = await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          cancellable: true,
+          title: vscode.l10n.t('Resolving Maven classpath...')
+        },
+        async (progress, token) => {
+          progress.report({ message: prepared.provider === 'sbt'
+            ? vscode.l10n.t('Running SBT classpath resolution')
+            : vscode.l10n.t('Running Maven dependency:build-classpath')
+          });
+          const resolved = prepared.provider === 'sbt'
+            ? await syncSbtClasspathWithJdk({
+              workspaceFolder: folder,
+              buildConfig,
+              dependencyConfig,
+              cancellationToken: token,
+              onOutput: (line) => {
+                if (line.trim().length > 0) {
+                  logger.info('RUN', line.trim());
+                }
+              }
+            })
+            : await syncMavenClasspathWithJdk({
+              workspaceFolder: folder,
+              module: selectedModule!,
+              buildConfig,
+              dependencyConfig,
+              cancellationToken: token,
+              onOutput: (line) => {
+                if (line.trim().length > 0) {
+                  logger.info('RUN', line.trim());
+                }
+              }
+            });
+
+          return resolved;
+        }
+      );
+
+      vscode.window.showInformationMessage(
+        vscode.l10n.t(
+          'Classpath synced for {0}: {1} entries cached, JDK modules selected: {2}.',
+          status.moduleArtifactId ?? selectedModule?.artifactId ?? folder.name,
+          String(status.jarsCount),
+          String(status.selectedJdkModuleCount)
+        )
+      );
+      if (selectedProvider) {
+        logger.info('CONFIG', `Classpath provider selection persisted: ${selectedProvider}.`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await writeDependencySyncFailure(folder, prepared.provider, message, startedAt);
+      if (/ENOENT|not found/i.test(message) && prepared.provider === 'maven') {
+        vscode.window.showErrorMessage(vscode.l10n.t('Maven not found. Install Maven or add a project wrapper (mvnw).'));
+        return;
+      }
+
+      if (/ENOENT|not found/i.test(message) && prepared.provider === 'sbt') {
+        vscode.window.showErrorMessage(vscode.l10n.t('SBT not found. Install SBT or add an sbt launcher script at workspace root.'));
+        return;
+      }
+
+      vscode.window.showErrorMessage(vscode.l10n.t('Classpath sync failed: {0}', message));
+    }
+  });
+
+  const fetchDependencySourcesDisposable = vscode.commands.registerCommand(COMMAND_FETCH_DEPENDENCY_SOURCES, async () => {
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    if (!folder) {
+      vscode.window.showWarningMessage(vscode.l10n.t('Open a workspace folder before fetching dependency sources.'));
+      return;
+    }
+
+    const buildConfig = await readBuildConfigFromWorkspaceConfig();
+    const dependencyConfig = await readDependencyConfigFromWorkspaceConfig();
+    if (!dependencyConfig.enabled) {
+      vscode.window.showInformationMessage(vscode.l10n.t('Dependency indexing is disabled in workspace configuration.'));
+      return;
+    }
+
+    const providerResult = await detectClasspathProvider(folder, { preferred: buildConfig.classpathProvider });
+    if (providerResult.provider === 'none') {
+      vscode.window.showWarningMessage(vscode.l10n.t('No Maven or SBT project detected in the workspace root.'));
+      return;
+    }
+    const detectedProvider: 'maven' | 'sbt' = providerResult.provider;
+
+    try {
+      const summary = await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          cancellable: true,
+          title: vscode.l10n.t('Fetching dependency sources...')
+        },
+        async (progress, token) => {
+          progress.report({ message: providerResult.provider === 'maven'
+            ? vscode.l10n.t('Running Maven dependency:sources and javadoc resolution')
+            : vscode.l10n.t('Running SBT updateClassifiers')
+          });
+
+          return fetchDependencyArtifacts({
+            workspaceFolder: folder,
+            provider: detectedProvider,
+            buildConfig,
+            cancellationToken: token,
+            onOutput: (line) => {
+              if (line.trim().length > 0) {
+                logger.info('RUN', line.trim());
+              }
+            }
+          });
+        }
+      );
+
+      vscode.window.showInformationMessage(
+        vscode.l10n.t(
+          'Dependency artifacts updated: sources {0}/{1}, javadocs {2}/{1}.',
+          String(summary.attachedSources),
+          String(summary.totalJars),
+          String(summary.attachedJavadocs)
+        )
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/ENOENT|not found/i.test(message) && detectedProvider === 'maven') {
+        vscode.window.showErrorMessage(vscode.l10n.t('Maven not found. Install Maven or add a project wrapper (mvnw).'));
+        return;
+      }
+
+      if (/ENOENT|not found/i.test(message) && detectedProvider === 'sbt') {
+        vscode.window.showErrorMessage(vscode.l10n.t('SBT not found. Install SBT or add an sbt launcher script at workspace root.'));
+        return;
+      }
+
+      vscode.window.showErrorMessage(vscode.l10n.t('Dependency source fetch failed: {0}', message));
+    }
+  });
+
+  const dependencyStatusDisposable = vscode.commands.registerCommand(COMMAND_DEPENDENCY_STATUS, async () => {
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    if (!folder) {
+      vscode.window.showWarningMessage(vscode.l10n.t('Open a workspace folder to inspect dependency index status.'));
+      return;
+    }
+
+    const buildConfig = await readBuildConfigFromWorkspaceConfig();
+    const providerResult = await detectClasspathProvider(folder, { preferred: buildConfig.classpathProvider });
+    const cacheSummary = await getScalaLiteCacheSummary(folder);
+    const cacheMb = (cacheSummary.totalBytes / (1024 * 1024)).toFixed(2);
+    const status = await readDependencySyncStatus(folder);
+    const attachmentSummary = await readDependencyAttachmentSummary(folder);
+    const statusLabel = status
+      ? (status.success
+        ? vscode.l10n.t('last run succeeded ({0} jars)', String(status.jarsCount))
+        : vscode.l10n.t('last run failed'))
+      : vscode.l10n.t('no sync run recorded');
+    const attachmentLabel = attachmentSummary
+      ? vscode.l10n.t('sources {0}/{1}, javadocs {2}/{1}', String(attachmentSummary.attachedSources), String(attachmentSummary.totalJars), String(attachmentSummary.attachedJavadocs))
+      : vscode.l10n.t('no source attachments');
+
+    vscode.window.showInformationMessage(
+      vscode.l10n.t(
+        'Dependency status — provider: {0}, cache: {1}, size: {2} MB, status: {3}, attachments: {4}.',
+        providerResult.provider,
+        cacheSummary.exists ? 'present' : 'missing',
+        cacheMb,
+        statusLabel,
+        attachmentLabel
+      )
+    );
+  });
+
+  const dependencyJdkStatusDisposable = vscode.commands.registerCommand(COMMAND_DEPENDENCY_JDK_STATUS, async () => {
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    if (!folder) {
+      vscode.window.showWarningMessage(vscode.l10n.t('Open a workspace folder to inspect JDK dependency status.'));
+      return;
+    }
+
+    const buildConfig = await readBuildConfigFromWorkspaceConfig();
+    const dependencyConfig = await readDependencyConfigFromWorkspaceConfig();
+    const jdkStatus = await resolveJdkModules(folder, buildConfig.jdkHome, dependencyConfig.jdkModules);
+
+    vscode.window.showInformationMessage(
+      vscode.l10n.t(
+        'JDK dependency status — source: {0}, home: {1}, modules selected: {2}, modules available: {3}.',
+        jdkStatus.source,
+        jdkStatus.home ?? 'n/a',
+        String(jdkStatus.selectedModules.length),
+        String(jdkStatus.availableModules.length)
+      )
+    );
+  });
+
+  const resetDependencyCacheDisposable = vscode.commands.registerCommand(COMMAND_RESET_DEPENDENCY_CACHE, async () => {
+    const didReset = await resetScalaLiteCache();
+    if (!didReset) {
+      vscode.window.showInformationMessage(vscode.l10n.t('No .scala-lite cache directory found to reset.'));
+      return;
+    }
+
+    vscode.window.showInformationMessage(vscode.l10n.t('Scala Lite dependency cache reset.'));
+  });
+
+  const openDependencyAttachmentDisposable = vscode.commands.registerCommand(COMMAND_OPEN_DEPENDENCY_ATTACHMENT, async (artifactPath?: string) => {
+    if (typeof artifactPath !== 'string' || artifactPath.trim().length === 0) {
+      vscode.window.showWarningMessage(vscode.l10n.t('Dependency artifact path is missing.'));
+      return;
+    }
+
+    const uri = vscode.Uri.file(artifactPath);
+    try {
+      await vscode.workspace.fs.stat(uri);
+    } catch {
+      vscode.window.showWarningMessage(vscode.l10n.t('Dependency artifact not found: {0}', artifactPath));
+      return;
+    }
+
+    try {
+      await vscode.commands.executeCommand('revealFileInOS', uri);
+      return;
+    } catch {
+    }
+
+    try {
+      const document = await vscode.workspace.openTextDocument(uri);
+      await vscode.window.showTextDocument(document, { preview: false });
+    } catch {
+      await vscode.env.openExternal(uri);
+    }
+  });
+
   const copyDiagnosticBundleDisposable = vscode.commands.registerCommand('scalaLite.copyDiagnosticBundle', async () => {
     const extensionVersion = String(context.extension.packageJSON.version ?? '0.0.0');
     const bundleUri = await createDiagnosticBundle(logger.getLastLines(500), extensionVersion);
@@ -413,6 +747,12 @@ export function activate(context: vscode.ExtensionContext): void {
     runIdleAuditDisposable,
     reDetectBuildToolDisposable,
     copyDiagnosticBundleDisposable,
+    syncClasspathDisposable,
+    fetchDependencySourcesDisposable,
+    dependencyStatusDisposable,
+    dependencyJdkStatusDisposable,
+    resetDependencyCacheDisposable,
+    openDependencyAttachmentDisposable,
     editorAccessDisposable,
     openDocumentAccessDisposable,
     logger,

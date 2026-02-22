@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'node:path';
 import { Minimatch } from 'minimatch';
 import { WorkspaceMode } from './modePresentation';
+import { queryDependencySymbols } from './dependencyQuery';
 import { IndexedSymbol, SymbolIndexManager } from './symbolIndex';
 import { resolveWorkspaceIgnoreRules } from './ignoreRules';
 import { readBudgetConfigFromWorkspaceConfig } from './workspaceConfig';
@@ -937,16 +938,25 @@ export class GoToDefinitionProvider implements vscode.DefinitionProvider {
     token: vscode.CancellationToken
   ): Promise<StageResolutionResult> {
     const nativeMatches = await this.symbolIndexManager.searchSymbols(originSnapshot.tokenText, 300, token);
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+    const dependencyMatches = workspaceFolder
+      ? await queryDependencySymbols(workspaceFolder, originSnapshot.tokenText, 80)
+      : [];
     
-    const candidates = nativeMatches
-      .filter((symbol) => symbol.symbolName === originSnapshot.tokenText)
+    const candidates = [...nativeMatches, ...dependencyMatches]
+      .filter((symbol) => symbol.symbolName.toLowerCase() === originSnapshot.tokenText.toLowerCase())
       .sort((left, right) => compareSymbols(left, right));
 
-    this.logger.debug('SEARCH', `Indexed candidates for '${originSnapshot.tokenText}': native=${nativeMatches.length}, final=${candidates.length}.`);
+    this.logger.debug('SEARCH', `Indexed candidates for '${originSnapshot.tokenText}': native=${nativeMatches.length}, dependency=${dependencyMatches.length}, final=${candidates.length}.`);
+
+    const hasJarCandidate = candidates.some((entry) => entry.filePath.endsWith('.jar'));
+    const confidence: StageConfidence = hasJarCandidate
+      ? 'low'
+      : (candidates.length === 1 ? 'high' : (candidates.length > 1 ? 'medium' : 'low'));
 
     return {
       stage: 'E',
-      confidence: candidates.length === 1 ? 'high' : (candidates.length > 1 ? 'medium' : 'low'),
+      confidence,
       candidates
     };
   }

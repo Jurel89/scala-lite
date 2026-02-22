@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { readDependencyAttachmentForPath } from './dependencyArtifacts';
 import { WorkspaceMode } from './modePresentation';
 import { IndexedSymbol } from './symbolIndex';
 import { StructuredLogger } from './structuredLogger';
@@ -93,6 +94,15 @@ function symbolKindCodicon(kind: IndexedSymbol['symbolKind']): string {
 
 function clampPreviewLines(value: number): number {
   return Math.max(0, Math.min(5, value));
+}
+
+function isDependencyCandidate(symbol: IndexedSymbol): boolean {
+  return symbol.packageName === 'dependency' || symbol.filePath.endsWith('.jar');
+}
+
+function commandLink(command: string, arg: string): string {
+  const encodedArgs = encodeURIComponent(JSON.stringify([arg]));
+  return `command:${command}?${encodedArgs}`;
 }
 
 async function readDefinitionPreview(filePath: string, lineNumber: number, maxPreviewLines: number): Promise<string | undefined> {
@@ -235,6 +245,10 @@ export class HoverInfoProvider implements vscode.HoverProvider {
       return this.buildAmbiguousHover(symbolName, resolved, wordRange, token);
     }
 
+    if (resolved.kind === 'single' && resolved.confidence !== 'high' && isDependencyCandidate(resolved.symbol)) {
+      return this.buildDependencyAwareLowConfidenceHover(symbolName, resolved, wordRange);
+    }
+
     if (resolved.confidence !== 'high') {
       return this.buildLowConfidenceHover(symbolName, wordRange);
     }
@@ -287,6 +301,52 @@ export class HoverInfoProvider implements vscode.HoverProvider {
       markdown.appendCodeblock(definitionPreview, 'scala');
     }
 
+    if (isDependencyCandidate(preferred)) {
+      const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+      if (workspaceFolder) {
+        const attachment = await readDependencyAttachmentForPath(workspaceFolder, preferred.filePath);
+        if (attachment) {
+          markdown.isTrusted = true;
+          markdown.appendMarkdown(`\n**${vscode.l10n.t('Dependency Artifacts')}**\n`);
+          if (attachment.sourcesPath) {
+            markdown.appendMarkdown(`- [${vscode.l10n.t('Open sources jar')}](${commandLink('scalaLite.openDependencyAttachment', attachment.sourcesPath)})\n`);
+          }
+          if (attachment.javadocPath) {
+            markdown.appendMarkdown(`- [${vscode.l10n.t('Open javadoc jar')}](${commandLink('scalaLite.openDependencyAttachment', attachment.javadocPath)})\n`);
+          }
+        }
+      }
+    }
+
+    return new vscode.Hover(markdown, wordRange);
+  }
+
+  private async buildDependencyAwareLowConfidenceHover(
+    symbolName: string,
+    resolved: Extract<SharedDefinitionResolution, { readonly kind: 'single' }>,
+    wordRange: vscode.Range
+  ): Promise<vscode.Hover> {
+    const markdown = new vscode.MarkdownString(undefined, true);
+    markdown.isTrusted = true;
+    markdown.appendMarkdown(`### ${symbolName}\n\n`);
+    markdown.appendMarkdown(`${vscode.l10n.t('Dependency candidate found from classpath index.')}  \n`);
+    markdown.appendMarkdown(`**${vscode.l10n.t('Defined at')}**: ${toRelativePath(resolved.symbol.filePath)}:${resolved.symbol.lineNumber}  \n`);
+
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+    if (workspaceFolder) {
+      const attachment = await readDependencyAttachmentForPath(workspaceFolder, resolved.symbol.filePath);
+      if (attachment?.sourcesPath || attachment?.javadocPath) {
+        markdown.appendMarkdown(`\n**${vscode.l10n.t('Dependency Artifacts')}**\n`);
+        if (attachment.sourcesPath) {
+          markdown.appendMarkdown(`- [${vscode.l10n.t('Open sources jar')}](${commandLink('scalaLite.openDependencyAttachment', attachment.sourcesPath)})\n`);
+        }
+        if (attachment.javadocPath) {
+          markdown.appendMarkdown(`- [${vscode.l10n.t('Open javadoc jar')}](${commandLink('scalaLite.openDependencyAttachment', attachment.javadocPath)})\n`);
+        }
+      }
+    }
+
+    markdown.appendMarkdown(`\n${vscode.l10n.t('Press F12 for navigation options.')} `);
     return new vscode.Hover(markdown, wordRange);
   }
 

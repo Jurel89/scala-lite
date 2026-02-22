@@ -229,6 +229,118 @@
       },
       "additionalProperties": false
     },
+    "deps": {
+      "type": "object",
+      "description": "Dependency indexing and classpath navigation settings.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "includeInWorkspaceSymbol": {
+          "type": "boolean",
+          "default": false
+        },
+        "indexTestScope": {
+          "type": "boolean",
+          "default": false
+        },
+        "cache": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        },
+        "indexCaps": {
+          "type": "object",
+          "properties": {
+            "maxJars": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2000,
+              "default": 500
+            },
+            "maxIndexTimeSeconds": {
+              "type": "integer",
+              "minimum": 10,
+              "maximum": 600,
+              "default": 120
+            }
+          },
+          "additionalProperties": false
+        },
+        "jdkModules": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": ["java.base"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "build": {
+      "type": "object",
+      "description": "Build tool settings used for classpath and dependency commands.",
+      "properties": {
+        "classpathProvider": {
+          "type": "string",
+          "enum": ["auto", "maven", "sbt"],
+          "default": "auto"
+        },
+        "jdkHome": {
+          "type": "string",
+          "default": ""
+        },
+        "maven": {
+          "type": "object",
+          "properties": {
+            "profiles": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "args": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "wrapperPath": {
+              "type": "string",
+              "default": ""
+            }
+          },
+          "additionalProperties": false
+        },
+        "sbt": {
+          "type": "object",
+          "properties": {
+            "args": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "strategy": {
+              "type": "string",
+              "enum": ["auto", "coursier", "sbt-show"],
+              "default": "sbt-show"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
     "workspaceDoctor": {
       "type": "object",
       "description": "Workspace Doctor execution settings.",

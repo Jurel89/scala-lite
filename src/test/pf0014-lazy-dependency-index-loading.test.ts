@@ -21,7 +21,8 @@ test('PF-0014: query path uses lookup tables to load only candidate segments', (
 
   assert.equal(source.includes('pub simple_name_lookup: HashMap<u32, Vec<u16>>'), true);
   assert.equal(source.includes('pub fqcn_lookup: HashMap<u32, u16>'), true);
-  assert.equal(source.includes('for (simple_name_id, segments) in &snapshot.simple_name_lookup'), true);
+  assert.equal(source.includes('normalized_simple_name_lookup'), true);
+  assert.equal(source.includes('snapshot.normalized_simple_name_lookup.get(&normalized)'), true);
   assert.equal(source.includes('let Some(segment_key) = snapshot.fqcn_lookup.get(&fqcn_id).copied() else'), true);
 });
 

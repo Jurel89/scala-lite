@@ -16,6 +16,7 @@ test('PF-0012: dependency hot memory is tracked and included in budget audit', (
   assert.equal(source.includes('dependencyUsedBytes'), true);
   assert.equal(source.includes('dependencyOverage'), true);
   assert.equal(source.includes('Mode dependency budget (bytes):'), true);
+  assert.equal(source.includes('evictDependencyIndexSegments(0)'), true);
 });
 
 test('PF-0012: dependency query updates hot-memory estimate', () => {
@@ -24,6 +25,7 @@ test('PF-0012: dependency query updates hot-memory estimate', () => {
   assert.equal(source.includes('lastDependencyHotMemoryBytes'), true);
   assert.equal(source.includes('estimateClasspathPayloadBytes'), true);
   assert.equal(source.includes('getDependencyHotMemoryUsageBytes'), true);
+  assert.equal(source.includes('getTotalDependencyMemoryUsageBytes'), true);
 });
 
 test('PF-0012: deps memory budget setting is exposed in schema and VS Code settings', () => {

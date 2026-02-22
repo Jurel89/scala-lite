@@ -18,6 +18,8 @@ test('TC-0008: Rust NAPI bridge exposes dependency index build/load/query/stats/
   assert.equal(rust.includes('pub fn query_dependency_symbols_in_package('), true);
   assert.equal(rust.includes('pub fn get_dependency_index_stats('), true);
   assert.equal(rust.includes('pub fn get_dependency_memory_usage('), true);
+  assert.equal(rust.includes('pub fn set_dependency_index_max_loaded_segments('), true);
+  assert.equal(rust.includes('pub fn evict_dependency_index_segments('), true);
 });
 
 test('TC-0008: TypeScript native bridge wires dependency index APIs with fallback-safe behavior', () => {
@@ -28,6 +30,8 @@ test('TC-0008: TypeScript native bridge wires dependency index APIs with fallbac
   assert.equal(bridge.includes('public async queryDependencySymbols('), true);
   assert.equal(bridge.includes('public async getDependencyIndexStats('), true);
   assert.equal(bridge.includes('public async getDependencyMemoryUsage('), true);
+  assert.equal(bridge.includes('public async evictDependencyIndexSegments('), true);
+  assert.equal(bridge.includes('public async setDependencyIndexMaxLoadedSegments('), true);
   assert.equal(bridge.includes('Dependency indexing API unavailable in native addon.'), true);
 });
 
@@ -39,5 +43,7 @@ test('TC-0008: generated native typings include dependency index methods and DTO
   assert.equal(dts.includes('queryDependencySymbols(handle: number, name: string, limit: number): Array<JsDependencySymbol>'), true);
   assert.equal(dts.includes('getDependencyIndexStats(handle: number): JsDepIndexStats'), true);
   assert.equal(dts.includes('getDependencyMemoryUsage(handle: number): JsDepMemoryUsage'), true);
+  assert.equal(dts.includes('setDependencyIndexMaxLoadedSegments(handle: number, maxSegments?: number'), true);
+  assert.equal(dts.includes('evictDependencyIndexSegments(handle: number, maxSegments: number): number'), true);
   assert.equal(dts.includes('export interface JsDependencySymbol {'), true);
 });

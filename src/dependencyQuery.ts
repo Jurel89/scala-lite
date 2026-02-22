@@ -1,6 +1,7 @@
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { readDependencyAttachmentsByJar } from './dependencyArtifacts';
+import { getNativeEngine } from './nativeEngineState';
 import { IndexedSymbol } from './symbolIndex';
 import { getScalaLiteCacheUri } from './scalaLiteCache';
 
@@ -126,9 +127,17 @@ export async function queryDependencySymbols(
 
   const payloads = await Promise.all(classpathFiles.map(async (uri) => readClasspathPayload(uri)));
   const attachmentsByJar = await readDependencyAttachmentsByJar(workspaceFolder);
+  let nativeDependencyBytes = 0;
+  try {
+    nativeDependencyBytes = await getNativeEngine().getTotalDependencyMemoryUsageBytes();
+  } catch {
+    nativeDependencyBytes = 0;
+  }
+
   lastDependencyHotMemoryBytes = payloads
     .reduce((sum, payload) => sum + estimateClasspathPayloadBytes(payload), 0)
-    + estimateAttachmentMapBytes(attachmentsByJar);
+    + estimateAttachmentMapBytes(attachmentsByJar)
+    + nativeDependencyBytes;
   const symbols: IndexedSymbol[] = [];
 
   for (const payload of payloads) {

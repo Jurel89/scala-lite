@@ -112,6 +112,7 @@ pub struct DependencySnapshot {
     pub(crate) access_order: RefCell<Vec<u16>>,
     pub(crate) max_loaded_segments: RefCell<Option<usize>>,
     pub(crate) string_id_lookup: HashMap<String, u32>,
+    pub(crate) normalized_simple_name_lookup: HashMap<String, Vec<u16>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -156,6 +157,34 @@ fn segment_key_for_package(package_name: &str) -> u16 {
 
 fn resolve_string(strings: &[String], identifier: u32) -> Option<&str> {
     strings.get(identifier as usize).map(String::as_str)
+}
+
+fn build_normalized_simple_name_lookup(
+    simple_name_lookup: &HashMap<u32, Vec<u16>>,
+    string_table: &[String],
+) -> HashMap<String, Vec<u16>> {
+    let mut lookup = HashMap::<String, HashSet<u16>>::new();
+
+    for (simple_name_id, segments) in simple_name_lookup {
+        let Some(simple_name) = resolve_string(string_table, *simple_name_id) else {
+            continue;
+        };
+
+        let normalized = simple_name.to_lowercase();
+        let entry = lookup.entry(normalized).or_default();
+        for segment in segments {
+            entry.insert(*segment);
+        }
+    }
+
+    lookup
+        .into_iter()
+        .map(|(name, segments)| {
+            let mut sorted = segments.into_iter().collect::<Vec<u16>>();
+            sorted.sort_unstable();
+            (name, sorted)
+        })
+        .collect::<HashMap<String, Vec<u16>>>()
 }
 
 fn ensure_segment_loaded(snapshot: &DependencySnapshot, segment_key: u16) -> Result<(), EngineError> {
@@ -322,11 +351,15 @@ pub fn build_dependency_snapshot(
         .map(|(index, value)| (value.clone(), index as u32))
         .collect::<HashMap<String, u32>>();
 
+    let string_table = string_ids.values;
+    let normalized_simple_name_lookup =
+        build_normalized_simple_name_lookup(&simple_name_lookup, &string_table);
+
     DependencySnapshot {
         schema_version: DEPENDENCY_INDEX_SCHEMA_VERSION,
         jar_manifests: jar_manifests.to_vec(),
         segment_table: Vec::new(),
-        string_table: string_ids.values,
+        string_table,
         simple_name_lookup,
         fqcn_lookup,
         index_path: None,
@@ -334,6 +367,7 @@ pub fn build_dependency_snapshot(
         access_order: RefCell::new(Vec::new()),
         max_loaded_segments: RefCell::new(None),
         string_id_lookup,
+        normalized_simple_name_lookup,
     }
 }
 
@@ -382,55 +416,34 @@ pub fn save_dependency_index(path: &str, snapshot: &DependencySnapshot) -> Resul
     let header_bytes =
         bincode::serialize(&header).map_err(|error| EngineError::Serialization(error.to_string()))?;
 
-    let table_overhead_bytes = 4u64;
-    let initial_data_offset = DEPENDENCY_INDEX_MAGIC.len() as u64
-        + 4
-        + header_bytes.len() as u64
-        + table_overhead_bytes;
-
     let mut lookup_entries = Vec::<SegmentLookupEntry>::new();
-    let mut segment_offset = initial_data_offset;
     for (key, blob, symbol_count) in &segment_blobs {
         lookup_entries.push(SegmentLookupEntry {
             segment_key: *key,
-            offset: segment_offset,
+            offset: 0,
             length: blob.len() as u64,
             symbol_count: *symbol_count,
         });
-        segment_offset += blob.len() as u64;
     }
 
-    let table = DependencyIndexTable {
+    let mut table = DependencyIndexTable {
         entries: lookup_entries,
     };
-    let table_bytes =
+    let provisional_table_bytes =
         bincode::serialize(&table).map_err(|error| EngineError::Serialization(error.to_string()))?;
 
-    let data_start_offset = DEPENDENCY_INDEX_MAGIC.len() as u64
+    let mut segment_offset = DEPENDENCY_INDEX_MAGIC.len() as u64
         + 4
         + header_bytes.len() as u64
         + 4
-        + table_bytes.len() as u64;
+        + provisional_table_bytes.len() as u64;
 
-    let adjusted_entries: Vec<SegmentLookupEntry> = table
-        .entries
-        .iter()
-        .scan(data_start_offset, |offset, entry| {
-            let adjusted = SegmentLookupEntry {
-                segment_key: entry.segment_key,
-                offset: *offset,
-                length: entry.length,
-                symbol_count: entry.symbol_count,
-            };
-            *offset += entry.length;
-            Some(adjusted)
-        })
-        .collect();
+    for entry in &mut table.entries {
+        entry.offset = segment_offset;
+        segment_offset += entry.length;
+    }
 
-    let adjusted_table = DependencyIndexTable {
-        entries: adjusted_entries,
-    };
-    let adjusted_table_bytes = bincode::serialize(&adjusted_table)
+    let table_bytes = bincode::serialize(&table)
         .map_err(|error| EngineError::Serialization(error.to_string()))?;
 
     let mut file = File::create(target_path).map_err(|error| EngineError::Io(error.to_string()))?;
@@ -440,9 +453,9 @@ pub fn save_dependency_index(path: &str, snapshot: &DependencySnapshot) -> Resul
         .map_err(|error| EngineError::Io(error.to_string()))?;
     file.write_all(&header_bytes)
         .map_err(|error| EngineError::Io(error.to_string()))?;
-    file.write_all(&(adjusted_table_bytes.len() as u32).to_le_bytes())
+    file.write_all(&(table_bytes.len() as u32).to_le_bytes())
         .map_err(|error| EngineError::Io(error.to_string()))?;
-    file.write_all(&adjusted_table_bytes)
+    file.write_all(&table_bytes)
         .map_err(|error| EngineError::Io(error.to_string()))?;
 
     for (_, blob, _) in &segment_blobs {
@@ -492,23 +505,29 @@ pub fn load_dependency_index(path: &str) -> Result<DependencySnapshot, EngineErr
     let table: DependencyIndexTable = bincode::deserialize(&table_bytes)
         .map_err(|error| EngineError::Deserialization(error.to_string()))?;
 
+    let string_table = header.string_table;
+    let simple_name_lookup = header.simple_name_lookup;
+    let normalized_simple_name_lookup =
+        build_normalized_simple_name_lookup(&simple_name_lookup, &string_table);
+    let string_id_lookup = string_table
+        .iter()
+        .enumerate()
+        .map(|(index, value)| (value.clone(), index as u32))
+        .collect::<HashMap<String, u32>>();
+
     Ok(DependencySnapshot {
         schema_version: header.schema_version,
         jar_manifests: header.jar_manifests,
         segment_table: table.entries,
-        string_id_lookup: header
-            .string_table
-            .iter()
-            .enumerate()
-            .map(|(index, value)| (value.clone(), index as u32))
-            .collect::<HashMap<String, u32>>(),
-        string_table: header.string_table,
-        simple_name_lookup: header.simple_name_lookup,
+        string_id_lookup,
+        string_table,
+        simple_name_lookup,
         fqcn_lookup: header.fqcn_lookup,
         index_path: Some(PathBuf::from(path)),
         loaded_segments: RefCell::new(HashMap::new()),
         access_order: RefCell::new(Vec::new()),
         max_loaded_segments: RefCell::new(None),
+        normalized_simple_name_lookup,
     })
 }
 
@@ -526,17 +545,19 @@ pub fn query_dep_symbols(
     let mut seen_fqcn = HashSet::<String>::new();
 
     let mut keys_set = HashSet::<u16>::new();
-    for (simple_name_id, segments) in &snapshot.simple_name_lookup {
-        let Some(simple_name) = resolve_string(&snapshot.string_table, *simple_name_id) else {
-            continue;
-        };
-
-        if !simple_name.to_lowercase().contains(&normalized) {
-            continue;
-        }
-
-        for key in segments {
+    if let Some(exact_segments) = snapshot.normalized_simple_name_lookup.get(&normalized) {
+        for key in exact_segments {
             keys_set.insert(*key);
+        }
+    } else {
+        for (simple_name, segments) in &snapshot.normalized_simple_name_lookup {
+            if !simple_name.contains(&normalized) {
+                continue;
+            }
+
+            for key in segments {
+                keys_set.insert(*key);
+            }
         }
     }
 

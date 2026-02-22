@@ -5,6 +5,7 @@ import { StructuredLogger } from './structuredLogger';
 import { MemoryBudgetOverrideConfig, readMemoryBudgetOverridesFromWorkspaceConfig } from './workspaceConfig';
 import { MemoryBreakdown } from './symbolIndex';
 import { getDependencyHotMemoryUsageBytes } from './dependencyQuery';
+import { getNativeEngine } from './nativeEngineState';
 import { getScalaLiteCacheSummary } from './scalaLiteCache';
 
 export const COMMAND_RUN_MEMORY_BUDGET_AUDIT = 'scalaLite.runMemoryBudgetAudit';
@@ -292,6 +293,16 @@ export async function auditMemoryBudgetForMode(
   if (withinHeap && withinNative && withinTotal && withinDependency) {
     logger.info('BUDGET', logMessage);
     return result;
+  }
+
+  if (result.dependencyOverage > 0) {
+    try {
+      const evicted = await getNativeEngine().evictDependencyIndexSegments(0);
+      if (evicted > 0) {
+        logger.info('BUDGET', `Evicted ${evicted} dependency index segments after dependency budget overage.`);
+      }
+    } catch {
+    }
   }
 
   logger.warn('BUDGET', `[MEMORY] Budget exceeded. ${logMessage}`);

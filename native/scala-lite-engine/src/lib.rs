@@ -10,9 +10,10 @@ mod dep_index;
 pub use dep_index::{
     build_dependency_snapshot, changed_jar_paths, dependency_index_is_stale, get_dep_index_stats,
     load_dependency_index, query_dep_symbol_by_fqcn, query_dep_symbols, query_dep_symbols_in_package,
-    save_dependency_index, ClassKind, DepIndexStats, DepSegment, DepSymbolEntry, DependencySnapshot,
-    DependencySymbol, DependencySymbolInput, JarManifest, SegmentLookupEntry,
-    DEPENDENCY_INDEX_SCHEMA_VERSION,
+    save_dependency_index, set_dependency_index_max_loaded_segments, ClassKind, DepIndexStats,
+    DepSegment, DepSymbolEntry, DependencySnapshot, DependencySymbol, DependencySymbolInput,
+    JarManifest, SegmentLookupEntry, Visibility, DEPENDENCY_INDEX_SCHEMA_VERSION,
+    evict_dependency_index_segments,
 };
 
 #[cfg(feature = "napi")]
@@ -303,12 +304,13 @@ pub fn index_jars_parallel(jar_paths: &[String]) -> Result<Vec<JarIndexResult>, 
             .par_iter()
             .enumerate()
             .map(|(position, jar_path)| {
+                let symbols = extract_dependency_symbols_from_jar(jar_path);
                 (
                     position,
                     JarIndexResult {
                         jar_path: jar_path.clone(),
-                        class_count: 0,
-                        indexed_symbol_count: 0,
+                        class_count: symbols.len().min(u32::MAX as usize) as u32,
+                        indexed_symbol_count: symbols.len().min(u32::MAX as usize) as u32,
                     },
                 )
             })
@@ -323,6 +325,67 @@ pub fn index_jars_parallel(jar_paths: &[String]) -> Result<Vec<JarIndexResult>, 
     });
 
     Ok(indexed.into_iter().map(|(_, result)| result).collect())
+}
+
+fn parse_class_entry(jar_path: &str, entry_name: &str) -> Option<DependencySymbolInput> {
+    if !entry_name.ends_with(".class") || entry_name.ends_with("module-info.class") {
+        return None;
+    }
+
+    let normalized_path = entry_name.trim_end_matches(".class").replace('\\', "/");
+    if normalized_path.is_empty() {
+        return None;
+    }
+
+    let fqcn = normalized_path.replace('/', ".");
+    let simple_name = fqcn.split('.').next_back()?.to_string();
+    if simple_name.is_empty() {
+        return None;
+    }
+
+    let package_name = fqcn
+        .rsplit_once('.')
+        .map(|(package, _)| package.to_string())
+        .unwrap_or_default();
+
+    Some(DependencySymbolInput {
+        simple_name,
+        fqcn,
+        package_name,
+        kind: ClassKind::Class,
+        visibility: Visibility::Unknown,
+        jar_path: jar_path.to_string(),
+        method_count: 0,
+        field_count: 0,
+    })
+}
+
+fn extract_dependency_symbols_from_jar(jar_path: &str) -> Vec<DependencySymbolInput> {
+    let file = match std::fs::File::open(jar_path) {
+        Ok(file) => file,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut archive = match zip::ZipArchive::new(file) {
+        Ok(archive) => archive,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut symbols = Vec::<DependencySymbolInput>::new();
+    for index in 0..archive.len() {
+        let Ok(entry) = archive.by_index(index) else {
+            continue;
+        };
+
+        let name = entry.name().to_string();
+        if let Some(symbol) = parse_class_entry(jar_path, &name) {
+            symbols.push(symbol);
+        }
+    }
+
+    symbols.sort_by(|left, right| left.fqcn.cmp(&right.fqcn).then(left.jar_path.cmp(&right.jar_path)));
+    symbols.dedup_by(|left, right| left.fqcn == right.fqcn && left.jar_path == right.jar_path);
+    symbols
 }
 
 fn tokenize_symbols(file_path: &str, content: &str) -> Vec<SymbolEntry> {
@@ -1460,10 +1523,11 @@ val publicValue = 42
 #[cfg(feature = "napi")]
 mod napi_bridge {
     use super::{
-        append_files, build_dependency_snapshot, get_dep_index_stats, get_diagnostics, get_memory_usage,
-        load_dependency_index, parse_file, query_dep_symbol_by_fqcn, query_dep_symbols,
-        query_dep_symbols_in_package, query_package_exists, query_symbols, query_symbols_in_package,
-        save_dependency_index, ClassKind, DependencySymbolInput, DiagnosticEntry, FileInput, IndexSnapshot,
+        append_files, build_dependency_snapshot, evict_dependency_index_segments, get_dep_index_stats,
+        get_diagnostics, get_memory_usage, load_dependency_index, parse_file,
+        query_dep_symbol_by_fqcn, query_dep_symbols, query_dep_symbols_in_package, query_package_exists,
+        query_symbols, query_symbols_in_package, save_dependency_index,
+        set_dependency_index_max_loaded_segments, ClassKind, DiagnosticEntry, FileInput, IndexSnapshot,
         JarManifest, MemoryUsage, ParseFileResult, SymbolEntry, Visibility,
     };
     use napi::bindgen_prelude::{Error, Result};
@@ -1571,7 +1635,6 @@ mod napi_bridge {
             .unwrap_or(0);
 
         let mut hasher = DefaultHasher::new();
-        jar_path.hash(&mut hasher);
         size_bytes.hash(&mut hasher);
         modified_secs.hash(&mut hasher);
 
@@ -1738,14 +1801,25 @@ mod napi_bridge {
             &self,
             jar_paths: Vec<String>,
             output_path: String,
-            _options: Option<JsDepIndexOptions>,
+            options: Option<JsDepIndexOptions>,
         ) -> Result<()> {
             let manifests: Vec<JarManifest> = jar_paths
                 .iter()
                 .map(|jar_path| to_manifest(jar_path))
                 .collect();
-            let symbols: Vec<DependencySymbolInput> = Vec::new();
+            let mut symbols = Vec::new();
+            for jar_path in &jar_paths {
+                symbols.extend(super::extract_dependency_symbols_from_jar(jar_path));
+            }
+
+            symbols.sort_by(|left, right| left.fqcn.cmp(&right.fqcn).then(left.jar_path.cmp(&right.jar_path)));
             let snapshot = build_dependency_snapshot(&symbols, &manifests);
+            if let Some(max_segments) = options.and_then(|value| value._max_segments) {
+                set_dependency_index_max_loaded_segments(
+                    &snapshot,
+                    Some(max_segments.max(0).min(usize::MAX as i32) as usize),
+                );
+            }
             save_dependency_index(&output_path, &snapshot)
                 .map_err(|error| Error::from_reason(error.to_string()))
         }
@@ -1887,6 +1961,39 @@ mod napi_bridge {
                 loaded_symbol_count: loaded_symbol_count.min(i32::MAX as usize) as i32,
                 estimated_bytes: estimated_bytes.min(i64::MAX as usize) as i64,
             })
+        }
+
+        #[napi]
+        pub fn set_dependency_index_max_loaded_segments(
+            &self,
+            handle: u32,
+            max_segments: Option<i32>,
+        ) -> Result<()> {
+            let guard = self
+                .dep_indexes
+                .lock()
+                .map_err(|_| Error::from_reason("dependency index lock poisoned".to_string()))?;
+            let snapshot = guard
+                .get(&handle)
+                .ok_or_else(|| Error::from_reason(format!("dependency index handle not found: {handle}")))?;
+
+            let normalized = max_segments.map(|value| value.max(0) as usize);
+            set_dependency_index_max_loaded_segments(snapshot, normalized);
+            Ok(())
+        }
+
+        #[napi]
+        pub fn evict_dependency_index_segments(&self, handle: u32, max_segments: i32) -> Result<i32> {
+            let guard = self
+                .dep_indexes
+                .lock()
+                .map_err(|_| Error::from_reason("dependency index lock poisoned".to_string()))?;
+            let snapshot = guard
+                .get(&handle)
+                .ok_or_else(|| Error::from_reason(format!("dependency index handle not found: {handle}")))?;
+
+            let evicted = evict_dependency_index_segments(snapshot, max_segments.max(0) as usize);
+            Ok(evicted.min(i32::MAX as usize) as i32)
         }
 
         #[napi]

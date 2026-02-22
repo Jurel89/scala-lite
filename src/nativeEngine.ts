@@ -106,6 +106,8 @@ interface NativeAddonApi {
   ): readonly NativeDependencySymbol[];
   get_dependency_index_stats(handle: number): NativeDependencyIndexStats;
   get_dependency_memory_usage(handle: number): NativeDependencyMemoryUsage;
+  set_dependency_index_max_loaded_segments(handle: number, maxSegments?: number): void;
+  evict_dependency_index_segments(handle: number, maxSegments: number): number;
   shutdown(): void;
 }
 
@@ -179,6 +181,10 @@ type NativeAddonMethodMap = {
   readonly get_dependency_index_stats?: (handle: number) => RawNativeDependencyIndexStats;
   readonly getDependencyMemoryUsage?: (handle: number) => RawNativeDependencyMemoryUsage;
   readonly get_dependency_memory_usage?: (handle: number) => RawNativeDependencyMemoryUsage;
+  readonly setDependencyIndexMaxLoadedSegments?: (handle: number, maxSegments?: number) => void;
+  readonly set_dependency_index_max_loaded_segments?: (handle: number, maxSegments?: number) => void;
+  readonly evictDependencyIndexSegments?: (handle: number, maxSegments: number) => number;
+  readonly evict_dependency_index_segments?: (handle: number, maxSegments: number) => number;
   readonly shutdown?: () => void;
 };
 
@@ -814,6 +820,10 @@ function resolveNativeAddonApi(moduleExports: unknown): NativeAddonApi | undefin
   const queryDependencySymbolsInPackage = methods.query_dependency_symbols_in_package ?? methods.queryDependencySymbolsInPackage;
   const getDependencyIndexStats = methods.get_dependency_index_stats ?? methods.getDependencyIndexStats;
   const getDependencyMemoryUsage = methods.get_dependency_memory_usage ?? methods.getDependencyMemoryUsage;
+  const setDependencyIndexMaxLoadedSegments =
+    methods.set_dependency_index_max_loaded_segments ?? methods.setDependencyIndexMaxLoadedSegments;
+  const evictDependencyIndexSegments =
+    methods.evict_dependency_index_segments ?? methods.evictDependencyIndexSegments;
   const shutdown = methods.shutdown;
 
   if (
@@ -920,6 +930,18 @@ function resolveNativeAddonApi(moduleExports: unknown): NativeAddonApi | undefin
       const usage = getDependencyMemoryUsage.call(instance, handle) as RawNativeDependencyMemoryUsage;
       return normalizeNativeDependencyMemoryUsage(usage);
     },
+    set_dependency_index_max_loaded_segments: (handle: number, maxSegments?: number) => {
+      if (typeof setDependencyIndexMaxLoadedSegments !== 'function') {
+        return;
+      }
+      setDependencyIndexMaxLoadedSegments.call(instance, handle, maxSegments);
+    },
+    evict_dependency_index_segments: (handle: number, maxSegments: number) => {
+      if (typeof evictDependencyIndexSegments !== 'function') {
+        return 0;
+      }
+      return Math.max(0, Math.round(evictDependencyIndexSegments.call(instance, handle, maxSegments) as number));
+    },
     shutdown: () => shutdown.call(instance)
   };
 }
@@ -974,12 +996,14 @@ function loadNativeAddon(): AddonLoadResult {
 export class NativeEngine {
   public status: NativeEngineStatus;
   private readonly fallback: TypeScriptFallbackEngine;
+  private readonly dependencyIndexHandles: Set<number>;
   private addon: NativeAddonApi | undefined;
 
   private constructor(status: NativeEngineStatus, addon: NativeAddonApi | undefined) {
     this.status = status;
     this.addon = addon;
     this.fallback = new TypeScriptFallbackEngine();
+    this.dependencyIndexHandles = new Set<number>();
   }
 
   public static create(): NativeEngine {
@@ -1153,6 +1177,7 @@ export class NativeEngine {
     try {
       if (this.addon) {
         this.addon.shutdown();
+        this.dependencyIndexHandles.clear();
       } else {
         this.fallback.shutdown();
       }
@@ -1183,7 +1208,9 @@ export class NativeEngine {
         return undefined;
       }
 
-      return this.addon.load_dependency_index(pathToIndex);
+      const handle = this.addon.load_dependency_index(pathToIndex);
+      this.dependencyIndexHandles.add(handle);
+      return handle;
     }, cancellationToken);
   }
 
@@ -1194,6 +1221,7 @@ export class NativeEngine {
       }
 
       this.addon.close_dependency_index(handle);
+      this.dependencyIndexHandles.delete(handle);
     }, cancellationToken);
   }
 
@@ -1276,6 +1304,41 @@ export class NativeEngine {
 
       return this.addon.get_dependency_memory_usage(handle);
     }, cancellationToken);
+  }
+
+  public async setDependencyIndexMaxLoadedSegments(handle: number, maxSegments?: number): Promise<void> {
+    if (!this.addon) {
+      return;
+    }
+
+    this.addon.set_dependency_index_max_loaded_segments(handle, maxSegments);
+  }
+
+  public async evictDependencyIndexSegments(maxSegments: number): Promise<number> {
+    if (!this.addon || this.dependencyIndexHandles.size === 0) {
+      return 0;
+    }
+
+    let evicted = 0;
+    const normalized = Math.max(0, Math.round(maxSegments));
+    for (const handle of this.dependencyIndexHandles) {
+      evicted += this.addon.evict_dependency_index_segments(handle, normalized);
+    }
+
+    return evicted;
+  }
+
+  public async getTotalDependencyMemoryUsageBytes(): Promise<number> {
+    if (!this.addon || this.dependencyIndexHandles.size === 0) {
+      return 0;
+    }
+
+    let total = 0;
+    for (const handle of this.dependencyIndexHandles) {
+      total += Math.max(0, Math.round(this.addon.get_dependency_memory_usage(handle).estimatedBytes));
+    }
+
+    return total;
   }
 
   public async restart(): Promise<void> {

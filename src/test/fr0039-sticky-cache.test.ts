@@ -74,21 +74,23 @@ test('FR-0039: stale cached entry is evicted when target no longer valid', async
 test('FR-0039: bypass configuration disables sticky cache usage', async () => {
   vscodeMock.workspace.__config['scalaLite.goToDefinition.stickyCache.bypass'] = true;
 
-  const provider = buildProvider({
-    getSymbolsForFile: () => [
-      { symbolName: 'Baz', filePath: '/workspace/src/File.scala', lineNumber: 25, symbolKind: 'def', visibility: 'public', packageName: 'com.example' }
-    ]
-  });
+  try {
+    const provider = buildProvider({
+      getSymbolsForFile: () => [
+        { symbolName: 'Baz', filePath: '/workspace/src/File.scala', lineNumber: 25, symbolKind: 'def', visibility: 'public', packageName: 'com.example' }
+      ]
+    });
 
-  const snapshot = originSnapshot('Baz');
-  (provider as any).recordStickyChoice(snapshot, {
-    symbolName: 'Baz', symbolKind: 'def', filePath: '/workspace/src/File.scala', lineNumber: 25, visibility: 'public', packageName: 'com.example'
-  });
+    const snapshot = originSnapshot('Baz');
+    (provider as any).recordStickyChoice(snapshot, {
+      symbolName: 'Baz', symbolKind: 'def', filePath: '/workspace/src/File.scala', lineNumber: 25, visibility: 'public', packageName: 'com.example'
+    });
 
-  const token = new vscodeMock.CancellationTokenSource().token as any;
-  const resolution = await (provider as any).resolveFromStickyCache(snapshot, token);
+    const token = new vscodeMock.CancellationTokenSource().token as any;
+    const resolution = await (provider as any).resolveFromStickyCache(snapshot, token);
 
-  assert.equal(resolution, undefined);
-
-  delete vscodeMock.workspace.__config['scalaLite.goToDefinition.stickyCache.bypass'];
+    assert.equal(resolution, undefined);
+  } finally {
+    delete vscodeMock.workspace.__config['scalaLite.goToDefinition.stickyCache.bypass'];
+  }
 });

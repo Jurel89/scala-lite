@@ -27,6 +27,7 @@ import {
 } from './runTestFeature';
 import { BuildDiagnosticsRunner } from './buildDiagnostics';
 import { StructuredLogger } from './structuredLogger';
+import { ScalaLiteLogCategory } from './structuredLogCore';
 import { createDiagnosticBundle } from './diagnosticBundle';
 import { ProfileManager } from './profileManager';
 import { registerScalafmtFeature } from './scalafmtFeature';
@@ -52,6 +53,7 @@ import { WorkspaceSymbolSearchProvider } from './workspaceSymbolFeature';
 import { FindUsagesProvider } from './findUsagesFeature';
 import { SyntaxDiagnosticsController } from './syntaxDiagnosticsFeature';
 import { HoverInfoProvider } from './hoverInfoFeature';
+import { ScalaCompletionProvider } from './completionFeature';
 import { ensureScalaLiteCacheDir, getScalaLiteCacheSummary, hasDependencyIndexCache, resetScalaLiteCache } from './scalaLiteCache';
 import { fetchDependencyArtifacts, readDependencyAttachmentSummary } from './dependencyArtifacts';
 import { resolveJdkModules } from './jdkResolver';
@@ -74,6 +76,13 @@ const DEPENDENCY_SYNC_BANNER_DISMISSED_KEY = 'scalaLite.deps.syncBanner.dismisse
 const IDLE_AUDIT_DURATION_MS = 30_000;
 const MODE_C_BUDGET_AUDIT_INTERVAL_MS = 60_000;
 const BUDGET_NOTIFICATION_DEBOUNCE_MS = 5 * 60_000;
+
+function fireAndForget(promise: Promise<unknown>, logger: StructuredLogger, context: ScalaLiteLogCategory): void {
+  void promise.catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.warn(context, `Unhandled async error: ${message}`);
+  });
+}
 
 function renderDetectionSummary(results: readonly BuildToolDetectionResult[]): string {
   return results
@@ -205,13 +214,17 @@ function normalizeWorkspaceFolderUri(value: unknown): vscode.Uri | undefined {
 export function activate(context: vscode.ExtensionContext): void {
   const activationStartedAt = Date.now();
   const logger = new StructuredLogger('INFO');
-  void readLogLevelFromWorkspaceConfig().then((level) => {
-    if (level) {
-      logger.setLevel(level);
-      logger.info('CONFIG', `Log level set to ${level} from workspace config.`);
-    }
-  });
-  void validateIgnoreRulesAtActivation(logger);
+  fireAndForget(
+    readLogLevelFromWorkspaceConfig().then((level) => {
+      if (level) {
+        logger.setLevel(level);
+        logger.info('CONFIG', `Log level set to ${level} from workspace config.`);
+      }
+    }),
+    logger,
+    'CONFIG'
+  );
+  fireAndForget(validateIgnoreRulesAtActivation(logger), logger, 'CONFIG');
   initializeNativeEngine(logger);
   logger.info('ACTIVATE', 'Extension activation started.');
 
@@ -336,7 +349,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }
 
     modeCBudgetAuditTimer = setInterval(() => {
-      void runMemoryAuditWithFeedback();
+      fireAndForget(runMemoryAuditWithFeedback(), logger, 'BUDGET');
     }, MODE_C_BUDGET_AUDIT_INTERVAL_MS);
   };
 
@@ -445,7 +458,7 @@ export function activate(context: vscode.ExtensionContext): void {
         return [];
       }
 
-      return [
+      const disposables: vscode.Disposable[] = [
         vscode.languages.registerCodeLensProvider(
           [{ language: 'scala' }, { pattern: '**/*.sbt' }],
           runMainProvider
@@ -455,6 +468,22 @@ export function activate(context: vscode.ExtensionContext): void {
           runTestProvider
         )
       ];
+
+      if (mode === 'C') {
+        const completionProvider = new ScalaCompletionProvider(
+          symbolIndexManager,
+          () => activeMode,
+          logger
+        );
+        disposables.push(
+          vscode.languages.registerCompletionItemProvider(
+            [{ language: 'scala' }],
+            completionProvider
+          )
+        );
+      }
+
+      return disposables;
     },
     definitionProvider,
     hoverProvider,
@@ -579,31 +608,28 @@ export function activate(context: vscode.ExtensionContext): void {
             ? vscode.l10n.t('Running SBT classpath resolution')
             : vscode.l10n.t('Running Maven dependency:build-classpath')
           });
+          const outputHandler = (line: string): void => {
+            const safeLine = redactSensitiveOutput(line).trim();
+            if (safeLine.length > 0) {
+              logger.info('RUN', safeLine);
+            }
+          };
           const resolved = prepared.provider === 'sbt'
             ? await syncSbtClasspathWithJdk({
               workspaceFolder: folder,
               buildConfig,
               dependencyConfig,
               cancellationToken: token,
-              onOutput: (line) => {
-                const safeLine = redactSensitiveOutput(line).trim();
-                if (safeLine.length > 0) {
-                  logger.info('RUN', safeLine);
-                }
-              }
+              onOutput: outputHandler
             })
             : await syncMavenClasspathWithJdk({
               workspaceFolder: folder,
-              module: selectedModule!,
+              // selectedModule is guaranteed non-undefined here by the guard at line 563
+              module: selectedModule ?? prepared.modules[0],
               buildConfig,
               dependencyConfig,
               cancellationToken: token,
-              onOutput: (line) => {
-                const safeLine = redactSensitiveOutput(line).trim();
-                if (safeLine.length > 0) {
-                  logger.info('RUN', safeLine);
-                }
-              }
+              onOutput: outputHandler
             });
 
           return resolved;
@@ -886,7 +912,7 @@ export function activate(context: vscode.ExtensionContext): void {
     logger
   );
   const modeCRebuildAuditDisposable = symbolIndexManager.onDidModeCRebuildCompleted(() => {
-    void runMemoryAuditWithFeedback();
+    fireAndForget(runMemoryAuditWithFeedback(), logger, 'BUDGET');
   });
   const modeCBudgetTimerDisposable = new vscode.Disposable(() => {
     if (modeCBudgetAuditTimer) {
@@ -931,14 +957,18 @@ export function activate(context: vscode.ExtensionContext): void {
     3000
   );
 
-  void (async () => {
-    await detectWorkspaceBuildTools(buildToolDetectionSession, buildToolState, logger, false);
-    await profileManager.initialize();
-    await maybeShowFirstTimeDependencySyncBanner();
-  })();
+  fireAndForget(
+    (async () => {
+      await detectWorkspaceBuildTools(buildToolDetectionSession, buildToolState, logger, false);
+      await profileManager.initialize();
+      await maybeShowFirstTimeDependencySyncBanner();
+    })(),
+    logger,
+    'ACTIVATE'
+  );
 
-  void modeManager.initialize();
-  void syntaxDiagnosticsController.refreshOpenDocuments();
+  fireAndForget(modeManager.initialize(), logger, 'ACTIVATE');
+  fireAndForget(syntaxDiagnosticsController.refreshOpenDocuments(), logger, 'DIAG');
   const activationElapsed = Date.now() - activationStartedAt;
   recordActivationDuration(activationElapsed, logger);
   if (activationElapsed > ACTIVATION_BUDGET_MS) {

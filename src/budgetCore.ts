@@ -16,6 +16,7 @@ export interface BudgetRunnerOptions {
 }
 
 export class BudgetRunner<T> {
+  private static readonly CANCELLATION_POLL_INTERVAL_MS = 500;
   private readonly operationName: string;
   private readonly timeBudgetMs: number;
   private readonly now: () => number;
@@ -56,7 +57,7 @@ export class BudgetRunner<T> {
       if (this.cancellationRequested()) {
         timeoutTriggered = true;
       }
-    }, 500);
+    }, BudgetRunner.CANCELLATION_POLL_INTERVAL_MS);
 
     const executionPromise = executor().then((value) => ({ value }));
     const outcome = await Promise.race([executionPromise, timeoutPromise]);

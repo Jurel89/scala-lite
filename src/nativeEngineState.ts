@@ -62,6 +62,8 @@ function bindMemoryUsageHook(engine: NativeEngine): void {
         };
       })
       .catch(() => {
+        // Memory polling is best-effort; errors suppressed to avoid log noise.
+        // Native engine unavailability is handled at a higher level by initializeNativeEngine.
       });
     return cachedUsage;
   };

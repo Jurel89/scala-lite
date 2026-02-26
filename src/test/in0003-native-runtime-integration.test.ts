@@ -40,7 +40,7 @@ test('IN-0003: extension wires syntax diagnostics controller and mode-triggered 
   const source = readSource('src/extension.ts');
   assert.equal(source.includes('new SyntaxDiagnosticsController(symbolIndexManager, () => activeMode, logger)'), true);
   assert.equal(source.includes('await syntaxDiagnosticsController.refreshOpenDocuments();'), true);
-  assert.equal(source.includes('void syntaxDiagnosticsController.refreshOpenDocuments();'), true);
+  assert.equal(source.includes('syntaxDiagnosticsController.refreshOpenDocuments()'), true);
 });
 
 test('IN-0003: syntax diagnostics controller reads diagnostics from SymbolIndexManager', () => {

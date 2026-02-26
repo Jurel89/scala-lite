@@ -218,9 +218,27 @@ export function registerScalafmtFeature(logger: StructuredLogger): vscode.Dispos
     }
   };
 
+  const rangeFormattingProvider: vscode.DocumentRangeFormattingEditProvider = {
+    async provideDocumentRangeFormattingEdits(document, range, options, token) {
+      // Format the full document, then only return edits that intersect the selected range.
+      // This avoids context-loss issues from formatting a partial snippet.
+      const fullEdits = await formattingProvider.provideDocumentFormattingEdits(document, options, token);
+      if (!fullEdits || fullEdits.length === 0) {
+        return [];
+      }
+
+      return fullEdits.filter((edit) => edit.range.intersection(range) !== undefined);
+    }
+  };
+
   const providerDisposable = vscode.languages.registerDocumentFormattingEditProvider(
     [{ language: 'scala' }, { pattern: '**/*.sbt' }],
     formattingProvider
+  );
+
+  const rangeProviderDisposable = vscode.languages.registerDocumentRangeFormattingEditProvider(
+    [{ language: 'scala' }, { pattern: '**/*.sbt' }],
+    rangeFormattingProvider
   );
 
   const willSaveDisposable = vscode.workspace.onWillSaveTextDocument(async (event) => {
@@ -245,5 +263,5 @@ export function registerScalafmtFeature(logger: StructuredLogger): vscode.Dispos
     );
   });
 
-  return [providerDisposable, willSaveDisposable];
+  return [providerDisposable, rangeProviderDisposable, willSaveDisposable];
 }

@@ -104,6 +104,13 @@ export const vscodeMock = {
   }
 };
 
+/** Reset mock config state between tests. Use in afterEach or try/finally. */
+export function resetMockConfig(): void {
+  for (const key of Object.keys(vscodeMock.workspace.__config)) {
+    delete vscodeMock.workspace.__config[key];
+  }
+}
+
 const originalRequire = (Module.prototype as any).require;
 (Module.prototype as any).require = function (id: string) {
   if (id === 'vscode') {

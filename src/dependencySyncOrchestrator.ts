@@ -125,7 +125,7 @@ export async function syncMavenClasspathWithJdk(
   const classpathResult = classpathSettled.value;
   const jdkResult: JdkResolutionResult = jdkSettled.status === 'fulfilled'
     ? jdkSettled.value
-    : { source: 'none' as const, availableModules: [], selectedModules: [] };
+    : { source: 'none' as const, availableModules: [], selectedModules: options.dependencyConfig.jdkModules };
 
   await writeCacheJson(options.workspaceFolder, JDK_STATE_FILE, {
     version: 1,
@@ -189,7 +189,7 @@ export async function syncSbtClasspathWithJdk(
   const classpathResult = classpathSettled.value;
   const jdkResult: JdkResolutionResult = jdkSettled.status === 'fulfilled'
     ? jdkSettled.value
-    : { source: 'none' as const, availableModules: [], selectedModules: [] };
+    : { source: 'none' as const, availableModules: [], selectedModules: options.dependencyConfig.jdkModules };
 
   await writeCacheJson(options.workspaceFolder, JDK_STATE_FILE, {
     version: 1,

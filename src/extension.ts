@@ -624,7 +624,7 @@ export function activate(context: vscode.ExtensionContext): void {
             })
             : await syncMavenClasspathWithJdk({
               workspaceFolder: folder,
-              // selectedModule is guaranteed non-undefined here by the guard at line 563
+              // selectedModule is guaranteed to be defined here by the guard above
               module: selectedModule ?? prepared.modules[0],
               buildConfig,
               dependencyConfig,

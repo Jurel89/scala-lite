@@ -67,7 +67,7 @@ jobs:
           cp "${RAW_NODE_FILE}" "${DESTINATION}"
           ls -lh "${DESTINATION}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: native-${{ matrix.target }}
           path: native/scala-lite-engine/bindings/scala-lite-engine.${{ matrix.suffix }}.node
@@ -75,7 +75,7 @@ jobs:
 
       - name: Upload native test fixtures (if present)
         if: hashFiles('native/scala-lite-engine/test-fixtures/**') != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: native-test-fixtures-${{ matrix.target }}
           path: native/scala-lite-engine/test-fixtures

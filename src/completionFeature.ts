@@ -6,7 +6,7 @@ import { StructuredLogger } from './structuredLogger';
 const COMPLETION_RESULT_LIMIT = 50;
 const COMPLETION_TRIGGER_MIN_LENGTH = 2;
 
-type SymbolKind = 'package' | 'object' | 'class' | 'trait' | 'def' | 'val' | 'type' | 'param';
+type SymbolKind = 'object' | 'class' | 'trait' | 'def' | 'val' | 'type' | 'param';
 
 function mapSymbolKindToCompletionKind(kind: SymbolKind): vscode.CompletionItemKind {
   switch (kind) {
@@ -16,7 +16,6 @@ function mapSymbolKindToCompletionKind(kind: SymbolKind): vscode.CompletionItemK
     case 'def': return vscode.CompletionItemKind.Method;
     case 'val': return vscode.CompletionItemKind.Variable;
     case 'type': return vscode.CompletionItemKind.TypeParameter;
-    case 'package': return vscode.CompletionItemKind.Module;
     case 'param': return vscode.CompletionItemKind.Variable;
   }
 }

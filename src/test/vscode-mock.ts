@@ -105,7 +105,7 @@ export const vscodeMock = {
     constructor(public label: string, public kind?: number) {}
   },
   CompletionItemKind: {
-    Class: 5,
+    Class: 6,
     Interface: 7,
     Module: 8,
     Method: 1,

@@ -408,6 +408,12 @@
         "path": "./syntaxes/sbt.tmLanguage.json"
       }
     ],
+    "snippets": [
+      {
+        "language": "scala",
+        "path": "./snippets/scala.json"
+      }
+    ],
     "jsonValidation": [
       {
         "fileMatch": [

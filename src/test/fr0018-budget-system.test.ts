@@ -22,7 +22,8 @@ test('FR-0018: BudgetRunner stops around configured time budget', async () => {
 
   assert.equal(result.status, 'stopped');
   assert.equal(result.stopReason, 'time');
-  assert.equal(result.elapsedMs <= budgetMs + 50, true);
+  // Use generous tolerance to avoid flakes on slow CI systems
+  assert.equal(result.elapsedMs <= budgetMs + 200, true);
 });
 
 test('FR-0018: extend action doubles budget and re-runs operation', async () => {

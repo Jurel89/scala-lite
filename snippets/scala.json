@@ -1,0 +1,112 @@
+{
+  "Case Class": {
+    "prefix": "cc",
+    "body": [
+      "case class ${1:Name}(${2:field}: ${3:Type})"
+    ],
+    "description": "Define a case class"
+  },
+  "Sealed Trait": {
+    "prefix": "st",
+    "body": [
+      "sealed trait ${1:Name}",
+      "",
+      "object ${1:Name} {",
+      "  $0",
+      "}"
+    ],
+    "description": "Define a sealed trait with companion object"
+  },
+  "Object": {
+    "prefix": "obj",
+    "body": [
+      "object ${1:Name} {",
+      "  $0",
+      "}"
+    ],
+    "description": "Define an object"
+  },
+  "For Comprehension": {
+    "prefix": "forc",
+    "body": [
+      "for {",
+      "  ${1:x} <- ${2:expr}",
+      "} yield ${3:result}"
+    ],
+    "description": "For-comprehension with yield"
+  },
+  "Pattern Match": {
+    "prefix": "mat",
+    "body": [
+      "${1:expr} match {",
+      "  case ${2:pattern} => $0",
+      "}"
+    ],
+    "description": "Pattern match expression"
+  },
+  "Main Method (Scala 3)": {
+    "prefix": "main",
+    "body": [
+      "@main def ${1:run}(): Unit = {",
+      "  $0",
+      "}"
+    ],
+    "description": "Scala 3 @main entry point"
+  },
+  "Trait": {
+    "prefix": "tr",
+    "body": [
+      "trait ${1:Name} {",
+      "  $0",
+      "}"
+    ],
+    "description": "Define a trait"
+  },
+  "Given Instance (Scala 3)": {
+    "prefix": "given",
+    "body": [
+      "given ${1:name}: ${2:Type} with {",
+      "  $0",
+      "}"
+    ],
+    "description": "Scala 3 given instance"
+  },
+  "Extension Method (Scala 3)": {
+    "prefix": "ext",
+    "body": [
+      "extension (${1:self}: ${2:Type})",
+      "  def ${3:method}: ${4:ReturnType} = $0"
+    ],
+    "description": "Scala 3 extension method"
+  },
+  "Enum (Scala 3)": {
+    "prefix": "enum",
+    "body": [
+      "enum ${1:Name} {",
+      "  case ${2:Variant}",
+      "  $0",
+      "}"
+    ],
+    "description": "Scala 3 enum"
+  },
+  "Test Suite (munit)": {
+    "prefix": "tsuite",
+    "body": [
+      "class ${1:Name}Suite extends munit.FunSuite {",
+      "  test(\"${2:description}\") {",
+      "    $0",
+      "  }",
+      "}"
+    ],
+    "description": "munit test suite"
+  },
+  "Implicit Class": {
+    "prefix": "implc",
+    "body": [
+      "implicit class ${1:Name}(val ${2:self}: ${3:Type}) extends AnyVal {",
+      "  def ${4:method}: ${5:ReturnType} = $0",
+      "}"
+    ],
+    "description": "Implicit class (value class)"
+  }
+}

@@ -99,10 +99,30 @@ export const vscodeMock = {
   QuickPickItemKind: {
     Separator: -1
   },
+  CompletionItem: class CompletionItem {
+    public detail?: string;
+    public sortText?: string;
+    constructor(public label: string, public kind?: number) {}
+  },
+  CompletionItemKind: {
+    Class: 5,
+    Interface: 7,
+    Module: 8,
+    Method: 1,
+    Variable: 5,
+    TypeParameter: 24
+  },
   l10n: {
     t: (str: string) => str
   }
 };
+
+/** Reset mock config state between tests. Use in afterEach or try/finally. */
+export function resetMockConfig(): void {
+  for (const key of Object.keys(vscodeMock.workspace.__config)) {
+    delete vscodeMock.workspace.__config[key];
+  }
+}
 
 const originalRequire = (Module.prototype as any).require;
 (Module.prototype as any).require = function (id: string) {

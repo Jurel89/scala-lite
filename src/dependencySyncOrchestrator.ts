@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { ClasspathProvider, detectClasspathProvider } from './buildToolDetector';
-import { resolveJdkModules } from './jdkResolver';
+import { JdkResolutionResult, resolveJdkModules } from './jdkResolver';
 import { MavenModule, discoverMavenModules, resolveMavenClasspath } from './mavenProvider';
 import { resolveSbtClasspath } from './sbtProvider';
 import { ensureScalaLiteCacheDir, getScalaLiteCacheUri } from './scalaLiteCache';
@@ -97,7 +97,7 @@ export async function syncMavenClasspathWithJdk(
 ): Promise<DependencySyncStatus> {
   const startedAt = Date.now();
 
-  const [classpathResult, jdkResult] = await Promise.all([
+  const [classpathSettled, jdkSettled] = await Promise.allSettled([
     resolveMavenClasspath({
       workspaceFolder: options.workspaceFolder,
       module: options.module,
@@ -115,6 +115,17 @@ export async function syncMavenClasspathWithJdk(
       options.dependencyConfig.jdkModules
     )
   ]);
+
+  if (classpathSettled.status === 'rejected') {
+    throw classpathSettled.reason instanceof Error
+      ? classpathSettled.reason
+      : new Error(String(classpathSettled.reason));
+  }
+
+  const classpathResult = classpathSettled.value;
+  const jdkResult: JdkResolutionResult = jdkSettled.status === 'fulfilled'
+    ? jdkSettled.value
+    : { source: 'none' as const, availableModules: [], selectedModules: options.dependencyConfig.jdkModules };
 
   await writeCacheJson(options.workspaceFolder, JDK_STATE_FILE, {
     version: 1,
@@ -152,7 +163,7 @@ export async function syncSbtClasspathWithJdk(
 ): Promise<DependencySyncStatus> {
   const startedAt = Date.now();
 
-  const [classpathResult, jdkResult] = await Promise.all([
+  const [classpathSettled, jdkSettled] = await Promise.allSettled([
     resolveSbtClasspath({
       workspaceFolder: options.workspaceFolder,
       includeTestScope: options.dependencyConfig.indexTestScope,
@@ -168,6 +179,17 @@ export async function syncSbtClasspathWithJdk(
       options.dependencyConfig.jdkModules
     )
   ]);
+
+  if (classpathSettled.status === 'rejected') {
+    throw classpathSettled.reason instanceof Error
+      ? classpathSettled.reason
+      : new Error(String(classpathSettled.reason));
+  }
+
+  const classpathResult = classpathSettled.value;
+  const jdkResult: JdkResolutionResult = jdkSettled.status === 'fulfilled'
+    ? jdkSettled.value
+    : { source: 'none' as const, availableModules: [], selectedModules: options.dependencyConfig.jdkModules };
 
   await writeCacheJson(options.workspaceFolder, JDK_STATE_FILE, {
     version: 1,

@@ -218,53 +218,9 @@ export function registerScalafmtFeature(logger: StructuredLogger): vscode.Dispos
     }
   };
 
-  const rangeFormattingProvider: vscode.DocumentRangeFormattingEditProvider = {
-    async provideDocumentRangeFormattingEdits(document, range, options, token) {
-      // Format the full document, then diff line-by-line and only emit edits
-      // for lines within the requested range. This avoids context-loss issues
-      // from formatting a partial snippet while ensuring "Format Selection"
-      // does not rewrite lines outside the selection.
-      const fullEdits = await formattingProvider.provideDocumentFormattingEdits(document, options, token);
-      if (!fullEdits || fullEdits.length === 0) {
-        return [];
-      }
-
-      const formattedText = fullEdits[0].newText;
-      const originalLines = document.getText().split('\n');
-      const formattedLines = formattedText.split('\n');
-
-      const edits: vscode.TextEdit[] = [];
-      const maxLine = Math.max(originalLines.length, formattedLines.length);
-
-      for (let i = 0; i < maxLine; i++) {
-        if (i < range.start.line || i > range.end.line) {
-          continue;
-        }
-
-        const originalLine = originalLines[i] ?? '';
-        const formattedLine = formattedLines[i] ?? '';
-
-        if (originalLine !== formattedLine) {
-          const lineRange = new vscode.Range(
-            new vscode.Position(i, 0),
-            new vscode.Position(i, originalLine.length)
-          );
-          edits.push(vscode.TextEdit.replace(lineRange, formattedLine));
-        }
-      }
-
-      return edits;
-    }
-  };
-
   const providerDisposable = vscode.languages.registerDocumentFormattingEditProvider(
     [{ language: 'scala' }, { pattern: '**/*.sbt' }],
     formattingProvider
-  );
-
-  const rangeProviderDisposable = vscode.languages.registerDocumentRangeFormattingEditProvider(
-    [{ language: 'scala' }, { pattern: '**/*.sbt' }],
-    rangeFormattingProvider
   );
 
   const willSaveDisposable = vscode.workspace.onWillSaveTextDocument(async (event) => {
@@ -289,5 +245,5 @@ export function registerScalafmtFeature(logger: StructuredLogger): vscode.Dispos
     );
   });
 
-  return [providerDisposable, rangeProviderDisposable, willSaveDisposable];
+  return [providerDisposable, willSaveDisposable];
 }

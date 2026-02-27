@@ -202,7 +202,6 @@ function extractSymbolsFromContent(filePath: string, content: string): IndexedSy
 }
 
 export class SymbolIndexManager implements vscode.Disposable {
-  private static readonly FILE_CLOSE_EVICTION_DELAY_MS = 1000;
   private static readonly DEFAULT_NATIVE_SYNC_BATCH_SIZE = 100;
   private readonly modeCRebuildCompletedEmitter = new vscode.EventEmitter<void>();
   private readonly stringTable = new JsStringTable();
@@ -220,11 +219,6 @@ export class SymbolIndexManager implements vscode.Disposable {
   public constructor(logger: StructuredLogger, getNativeEngine: () => NativeEngine) {
     this.logger = logger;
     this.getNativeEngine = getNativeEngine;
-  }
-
-  /** Canonical key for all per-file Maps. Uses fsPath for consistency with the native engine. */
-  private fileKey(uri: vscode.Uri): string {
-    return uri.fsPath;
   }
 
   public readonly onDidModeCRebuildCompleted: vscode.Event<void> = this.modeCRebuildCompletedEmitter.event;
@@ -265,7 +259,7 @@ export class SymbolIndexManager implements vscode.Disposable {
         return;
       }
 
-      const key = this.fileKey(document.uri);
+      const key = document.uri.toString();
       const existingTimer = this.fileCloseEvictionTimers.get(key);
       if (existingTimer) {
         clearTimeout(existingTimer);
@@ -273,12 +267,12 @@ export class SymbolIndexManager implements vscode.Disposable {
 
       const evictionTimer = setTimeout(() => {
         this.indexByFile.delete(key);
-        this.diagnosticsByFile.delete(key);
+        this.diagnosticsByFile.delete(document.uri.fsPath);
         this.importsByFile.delete(key);
-        this.packageByFile.delete(key);
+        this.packageByFile.delete(document.uri.fsPath);
         this.fileCloseEvictionTimers.delete(key);
         void this.evictFileFromNativeIndex(document.uri.fsPath);
-      }, SymbolIndexManager.FILE_CLOSE_EVICTION_DELAY_MS);
+      }, 1000);
 
       this.fileCloseEvictionTimers.set(key, evictionTimer);
     });
@@ -319,11 +313,11 @@ export class SymbolIndexManager implements vscode.Disposable {
   }
 
   public getSymbolsForFile(documentUri: vscode.Uri): readonly IndexedSymbol[] {
-    return this.indexByFile.get(this.fileKey(documentUri)) ?? [];
+    return this.indexByFile.get(documentUri.toString()) ?? [];
   }
 
   public getImportsForFile(documentUri: vscode.Uri): readonly ImportRecord[] {
-    return this.importsByFile.get(this.fileKey(documentUri)) ?? [];
+    return this.importsByFile.get(documentUri.toString()) ?? [];
   }
 
   public getMemoryBudgetMetrics(): WorkspaceMemoryMetrics {
@@ -720,16 +714,15 @@ export class SymbolIndexManager implements vscode.Disposable {
       'INDEX',
       `Indexed ${fileUri.fsPath} with ${symbols.length} symbol(s) using ${parsed ? 'native' : 'typescript'} parser.`
     );
-    const key = this.fileKey(fileUri);
-    this.indexByFile.set(key, [...symbols]);
-    this.importsByFile.set(key, [...imports]);
+    this.indexByFile.set(fileUri.toString(), [...symbols]);
+    this.importsByFile.set(fileUri.toString(), [...imports]);
     const packageSymbol = symbols.find((symbol) => symbol.symbolKind === 'package');
     if (packageSymbol) {
-      this.packageByFile.set(key, packageSymbol.packageName || packageSymbol.symbolName);
+      this.packageByFile.set(fileUri.fsPath, packageSymbol.packageName || packageSymbol.symbolName);
     } else {
-      this.packageByFile.delete(key);
+      this.packageByFile.delete(fileUri.fsPath);
     }
-    this.diagnosticsByFile.set(key, [...(parsed?.diagnostics ?? [])]);
+    this.diagnosticsByFile.set(fileUri.fsPath, [...(parsed?.diagnostics ?? [])]);
   }
 
   private async tryParseWithNative(

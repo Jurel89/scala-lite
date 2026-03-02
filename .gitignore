@@ -34,7 +34,6 @@ pnpm-debug.log*
 
 # Rust native engine build artifacts
 native/scala-lite-engine/target/
-native/scala-lite-engine/Cargo.lock
 native/scala-lite-engine/*.node
 native/scala-lite-engine/index.d.ts
 native/scala-lite-engine/index.js

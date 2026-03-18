@@ -439,7 +439,7 @@
     "test:smoke": "node dist/test/smoke.vscode-test.js"
   },
   "dependencies": {
-    "fast-xml-parser": "^5.4.1",
+    "fast-xml-parser": "^5.5.6",
     "jszip": "^3.10.1",
     "minimatch": "^10.2.4"
   },
